@@ -2,6 +2,8 @@
 
 I build production-grade, end-to-end serverless architectures with AWS. 
 
+**HOW I USE AI: I consider using AI to be like flying an airplane. It gets a skilled pilot to where they want to be very quickly, but it demands a high level of skill, a constant attention to detail, and deep understanding of safety and navigation rules.**
+
 This example Lambda/RDS project demonstrates some of the secure, infrastructure-as-code (IaC) principles I adhere to. It strictly isolates the database from the internet using a well-planned VPC network, and it implements least-privilege IAM access. All projects are bespoke to manage compute spend. 
 
 ## Core Infrastructure Components
