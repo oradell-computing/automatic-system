@@ -16,7 +16,7 @@ In this repo, that looks like:
 
 ```mermaid
 flowchart LR
-    client([Client]) --> api[API Gateway<br/>throttled, access-logged]
+    client([Client]) --> api[API Gateway<br/>IAM-authorized, throttled, access-logged]
     subgraph vpc[VPC across 2 AZs]
         subgraph app[App subnets]
             fn[Lambda<br/>Python, ARM64]
@@ -37,19 +37,19 @@ flowchart LR
 ```
 
 - **Network:** A two-AZ VPC with three subnet tiers. Public subnets hold only the NAT gateway, app subnets hold Lambda, and data subnets hold RDS with no internet route in either direction.
-- **API and compute:** API Gateway routes to a Python Lambda running on Graviton (ARM64). The stage is throttled and writes JSON access logs, and X-Ray tracing is on.
-- **Data:** RDS PostgreSQL with encrypted storage. The only inbound rule allows the Lambda security group on port 5432.
+- **API and compute:** API Gateway routes to a Python Lambda running on Graviton (ARM64). The stage is throttled and writes JSON access logs, and X-Ray tracing is on. Every route requires a request signed by an approved AWS identity (IAM), except an open `GET /health` for uptime monitors.
+- **Data:** RDS PostgreSQL with encrypted storage. Inbound access is limited to two security groups on port 5432: the API's Lambda and the secret-rotation Lambda.
 - **Credentials:** RDS generates the database password, stores it in Secrets Manager, and rotates it every 30 days. No credentials live in code or environment variables.
 - **Observability:** Each stack defines alarms for its own resources and sends them to one shared SNS topic. A separate stack builds a dashboard that combines RDS, Lambda, and API metrics.
 
 ## Engineering details worth a look
 
 - **No boto3.** The handler reads the database secret through the AWS Parameters and Secrets Lambda Extension, a local HTTP endpoint with built-in caching, using only the standard library.
-- **Least privilege through grants.** Lambda's access is `db_secret.grant_read()`, scoped to one secret ARN. The remaining wildcard permissions come from X-Ray and VPC networking, which AWS requires, and are documented as accepted findings.
+- **Least privilege through grants.** Lambda's access is `db_secret.grant_read()`, scoped to one secret ARN. The remaining wildcard permissions come from X-Ray, VPC networking and CDK's log-retention helper, which AWS requires, and are documented as accepted findings.
 - **The database is protected from Lambda bursts.** Reserved concurrency caps how many Lambdas can hold connections at once, and an alarm fires when that cap is hit.
 - **Cycle-free stacks.** Dependencies flow `vpc → database → compute → monitoring`. Turning on secret rotation would have created a circular dependency between the VPC and database stacks, so the DB security group lives with the database. The design doc explains why.
 - **One config object.** A frozen `@dataclass` in `app.py` holds every size, count, retention period, and removal policy, so moving to production means changing config rather than editing stacks.
-- **Verified.** `cdk synth` passes, `mypy` reports no issues, and every remaining `cdk-nag` finding is listed below with its reason.
+- **Verified.** `cdk synth` passes, `mypy` reports no issues, and the `cdk-nag` scan passes: every remaining finding is suppressed in `app.py` with its reason and listed in the design doc.
 
 ## Demo defaults vs. production
 
@@ -61,13 +61,17 @@ This is a demo, and some settings are deliberately cheap or disposable. Each one
 | Teardown | `RemovalPolicy.DESTROY` | `RETAIN` or `SNAPSHOT` |
 | NAT | One gateway | One per AZ |
 | Logs | 1-week retention | 30+ days |
-| API access | No authorizer or WAF | Cognito/IAM/Lambda authorizer, WAFv2 web ACL |
+| Database insight | Performance Insights off (not available on `db.t4g.micro`) | Larger instance, `db_performance_insights=True` |
+| API access | IAM on every route except an open `/health`; no WAF | WAFv2 web ACL; Cognito or Lambda authorizer if customers sign in |
 
 ## Project structure
 
 ```
 ├── CLAUDE.md                       # Rules for Claude Code
 ├── app.py                          # DemoConfig, tags, stack wiring
+├── cdk.json                        # Tells the CDK CLI how to run app.py
+├── requirements.txt                # Pinned CDK libraries
+├── requirements-dev.txt            # Adds cdk-nag and mypy
 ├── docs/
 │   └── cdk-well-architected.md     # Design rationale per file
 ├── infrastructure/
@@ -89,9 +93,10 @@ This is a demo, and some settings are deliberately cheap or disposable. Each one
 npm install -g aws-cdk
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+pip install -r requirements-dev.txt    # optional: security scan and type checks
 ```
 
-Replace the placeholder account ID in `app.py` with your own, then:
+The app deploys to the account and region of your current AWS CLI profile. Then:
 
 ```bash
 cdk bootstrap                # once per account/region
@@ -100,10 +105,16 @@ cdk synth -c nag=1           # optional security scan
 cdk deploy --all
 ```
 
-The compute stack prints an `ApiEndpoint` output. Call it to confirm the Lambda can reach its secret:
+The compute stack prints an `ApiEndpoint` output. Call the open health check to confirm the Lambda can reach its secret and the database (it answers `{"status": "ok"}`):
 
 ```bash
-curl <ApiEndpoint>items
+curl <ApiEndpoint>health
+```
+
+`/items` requires a request signed by an AWS identity allowed to invoke the API, for example with [awscurl](https://github.com/okigan/awscurl):
+
+```bash
+awscurl --region <region> <ApiEndpoint>items
 ```
 
 Tear everything down:
