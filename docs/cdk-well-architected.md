@@ -92,6 +92,8 @@ class DemoConfig:
     db_max_storage_gib: int = 50
     db_backup_days: int = 1
     db_deletion_protection: bool = False
+    # The database alone can keep a final backup (SNAPSHOT) when it is deleted.
+    db_removal_policy: cdk.RemovalPolicy = cdk.RemovalPolicy.DESTROY
     db_performance_insights: bool = False  # not available on the micro size
     secret_rotation_days: int = 30
 
@@ -114,9 +116,17 @@ class DemoConfig:
     lambda_error_alarm_count: int = 5
     api_5xx_alarm_count: int = 5
 
-    # Housekeeping
+    # Housekeeping: what happens to logs and other resources when stacks are deleted
     log_retention: logs.RetentionDays = logs.RetentionDays.ONE_WEEK
     removal_policy: cdk.RemovalPolicy = cdk.RemovalPolicy.DESTROY
+
+    def __post_init__(self) -> None:
+        """Reject settings that CloudFormation would refuse at deploy time."""
+        if self.removal_policy == cdk.RemovalPolicy.SNAPSHOT:
+            raise ValueError(
+                "removal_policy cannot be SNAPSHOT: log groups only support DESTROY "
+                "or RETAIN. Use db_removal_policy for a final database snapshot."
+            )
 
 
 app = cdk.App()
@@ -470,7 +480,8 @@ class DatabaseStack(Stack):
             storage_encrypted=True,
             backup_retention=Duration.days(config.db_backup_days),
             deletion_protection=config.db_deletion_protection,
-            removal_policy=config.removal_policy,
+            # Demo: deleted with the stack. Production: SNAPSHOT keeps a final backup.
+            removal_policy=config.db_removal_policy,
             # Database logs go to CloudWatch for troubleshooting and audits.
             cloudwatch_logs_exports=["postgresql"],
             cloudwatch_logs_retention=config.log_retention,
@@ -536,7 +547,7 @@ class DatabaseStack(Stack):
 
 **Expansion hooks**
 
-- Production: `db_multi_az=True`, `deletion_protection=True`, `backup_retention=Duration.days(7)` or more, `RemovalPolicy.SNAPSHOT`.
+- Production: `db_multi_az=True`, `deletion_protection=True`, `backup_retention=Duration.days(7)` or more, `db_removal_policy=RemovalPolicy.SNAPSHOT`.
 - Add an `rds.DatabaseProxy` between Lambda and RDS when concurrency grows; it pools connections so Lambda bursts don't exhaust `max_connections`.
 - Wire alarms to an SNS topic: `alarm.add_alarm_action(cloudwatch_actions.SnsAction(topic))` (import `aws_cloudwatch_actions`).
 - Swap `storage_encrypted=True` for `storage_encryption_key=kms.Key(...)` to use a customer-managed key.

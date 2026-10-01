@@ -58,7 +58,7 @@ This is a demo, and some settings are deliberately cheap or disposable. Each one
 | Area | Demo setting | Production change |
 |---|---|---|
 | RDS availability | Single-AZ, 1-day backups | Multi-AZ, 7+ day backups, deletion protection |
-| Teardown | `RemovalPolicy.DESTROY` | `RETAIN` or `SNAPSHOT` |
+| Teardown | `RemovalPolicy.DESTROY` for everything | `removal_policy=RETAIN`; `db_removal_policy=SNAPSHOT` (final backup) or `RETAIN` |
 | NAT | One gateway | One per AZ |
 | Logs | 1-week retention | 30+ days |
 | Database insight | Performance Insights off (not available on `db.t4g.micro`) | Larger instance, `db_performance_insights=True` |

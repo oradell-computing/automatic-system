@@ -89,7 +89,8 @@ class DatabaseStack(Stack):
             storage_encrypted=True,
             backup_retention=Duration.days(config.db_backup_days),
             deletion_protection=config.db_deletion_protection,
-            removal_policy=config.removal_policy,
+            # Demo: deleted with the stack. Production: SNAPSHOT keeps a final backup.
+            removal_policy=config.db_removal_policy,
             # Database logs go to CloudWatch for troubleshooting and audits.
             cloudwatch_logs_exports=["postgresql"],
             cloudwatch_logs_retention=config.log_retention,
