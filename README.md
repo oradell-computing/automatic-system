@@ -16,7 +16,7 @@ In this repo, that looks like:
 
 ```mermaid
 flowchart LR
-    client([Client]) --> api[API Gateway<br/>IAM-authorized, throttled, access-logged]
+    client([Client]) --> api[API Gateway<br/>IAM-authorized, throttled, traced]
     subgraph vpc[VPC across 2 AZs]
         subgraph app[App subnets]
             fn[Lambda<br/>Python, ARM64]
@@ -37,10 +37,10 @@ flowchart LR
 ```
 
 - **Network:** A two-AZ VPC with three subnet tiers. Public subnets hold only the NAT gateway, app subnets hold Lambda, and data subnets hold RDS with no internet route in either direction.
-- **API and compute:** API Gateway routes to a Python Lambda running on Graviton (ARM64). The stage is throttled and writes JSON access logs, and X-Ray tracing is on. Every route requires a request signed by an approved AWS identity (IAM), except an open `GET /health` for uptime monitors.
+- **API and compute:** API Gateway routes to a Python Lambda running on Graviton (ARM64). The stage is throttled and X-Ray tracing is on. API Gateway's own logs (JSON access logs and error logs) are available but off by default, because they need an account-wide role shared by every API in the account and Region; turn them on with `-c api_logging=true`. Every route requires a request signed by an approved AWS identity (IAM), except an open `GET /health` for uptime monitors.
 - **Data:** RDS PostgreSQL with encrypted storage. Inbound access is limited to two security groups on port 5432: the API's Lambda and the secret-rotation Lambda.
 - **Credentials:** RDS generates the database password, stores it in Secrets Manager, and rotates it every 30 days. No credentials live in code or environment variables.
-- **Observability:** Each stack defines alarms for its own resources and sends them to one shared SNS topic, which emails the address you give at deploy time. Every log group belongs to a stack, including the ones AWS services would otherwise create on their own (database, password rotation, API Gateway errors), so retention and clean-up follow `DemoConfig`. A separate stack builds a dashboard that combines RDS, Lambda, and API metrics.
+- **Observability:** Each stack defines alarms for its own resources and sends them to one shared SNS topic, which emails the address you give at deploy time. Every log group belongs to a stack, including the ones AWS services would otherwise create on their own (database, password rotation, and API Gateway errors when API logging is on), so retention and clean-up follow `DemoConfig`. A separate stack builds a dashboard that combines RDS, Lambda, and API metrics.
 
 ## Engineering details worth a look
 
@@ -62,6 +62,7 @@ This is a demo, and some settings are deliberately cheap or disposable. Each one
 | NAT | One gateway | One per AZ |
 | Logs | 1-week retention | 30+ days |
 | Database insight | Performance Insights off (not available on `db.t4g.micro`) | Larger instance, `db_performance_insights=True` |
+| API logs | Off, so the demo changes no account-wide settings | `api_logging=true` (or deploy with `-c api_logging=true`) |
 | API access | IAM on every route except an open `/health`; no WAF | WAFv2 web ACL; Cognito or Lambda authorizer if customers sign in |
 
 ## Project structure
@@ -87,7 +88,7 @@ This is a demo, and some settings are deliberately cheap or disposable. Each one
 
 > **Cost warning:** The NAT gateway and RDS instance bill by the hour whether or not the API gets traffic. Run `cdk destroy --all` when you're done, and check the [AWS Pricing Calculator](https://calculator.aws/) for current rates in your region.
 
-**Prerequisites:** An AWS account with credentials configured, Node.js (for the CDK CLI), and Python 3.11+.
+**Prerequisites:** An AWS account with credentials configured, Node.js (for the CDK CLI), and Python 3.11+. Use a dedicated sandbox account if you can: it keeps the hourly costs easy to track and keeps the demo away from anything else you run.
 
 ```bash
 npm install -g aws-cdk
@@ -103,6 +104,7 @@ cdk bootstrap                # once per account/region
 cdk synth                    # build the CloudFormation templates
 cdk synth -c nag=1           # optional security scan
 cdk deploy --all -c alarm_email=you@example.com   # AWS emails you a link to confirm alerts
+# optional: add -c api_logging=true for API Gateway's own logs (changes an account-wide setting)
 ```
 
 The compute stack prints an `ApiEndpoint` output. Call the open health check to confirm the Lambda can reach its secret and the database (it answers `{"status": "ok"}`):
@@ -117,7 +119,7 @@ curl <ApiEndpoint>health
 awscurl --region <region> <ApiEndpoint>items
 ```
 
-Tear everything down. With the demo settings this also deletes the log groups and API Gateway's logging role, which is shared by every API in the account and Region:
+Tear everything down. With the demo settings this deletes the demo's stacks and their log groups. Two things stay on purpose: the `CDKToolkit` stack that `cdk bootstrap` created (shared by all CDK apps in the account and Region), and, if you turned on API logging, API Gateway's account-wide logging role, which other APIs may rely on:
 
 ```bash
 cdk destroy --all
