@@ -130,7 +130,8 @@ class DemoConfig:
 
 
 app = cdk.App()
-config = DemoConfig()
+# The alert email is set at deploy time: cdk deploy --all -c alarm_email=you@example.com
+config = DemoConfig(alarm_email=app.node.try_get_context("alarm_email"))
 
 # Deploys to the AWS account and region of your current AWS CLI profile.
 env = cdk.Environment(
@@ -197,16 +198,6 @@ if app.node.try_get_context("nag") is not None:
             ),
             NagPackSuppression(
                 id="AwsSolutions-RDS11", reason="Default port 5432; optional to change"
-            ),
-            NagPackSuppression(
-                id="AwsSolutions-IAM4",
-                reason="AWS managed logging policy on CDK's log-retention helper",
-                applies_to=[lambda_logging],
-            ),
-            NagPackSuppression(
-                id="AwsSolutions-IAM5",
-                reason="CDK's log-retention helper needs * to set RDS log retention",
-                applies_to=["Resource::*"],
             ),
         ],
     )
@@ -283,12 +274,13 @@ data zone has no path to or from the internet at all.
 
 Security you can audit
 Blocked connection attempts are recorded for security reviews, and every stack
-sends its alerts to one shared channel.
+sends its alerts to one shared channel, which emails the team once you set an
+address at deploy time.
 """
 
 from typing import TYPE_CHECKING, Any
 
-from aws_cdk import Stack
+from aws_cdk import Annotations, Stack
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_sns as sns
@@ -374,6 +366,12 @@ class VpcStack(Stack):
             self.alarm_topic.add_subscription(
                 subscriptions.EmailSubscription(config.alarm_email)
             )
+        else:
+            # Shown at synth and deploy time, so nobody ships silent alarms by accident.
+            Annotations.of(self).add_warning(
+                "No alarm_email set: alarms go to a topic nobody is subscribed to. "
+                "Deploy with -c alarm_email=you@example.com."
+            )
 ```
 
 Three subnet tiers: `Public` (NAT gateway only), `App` (Lambda; outbound via NAT), `Data` (RDS; no route to the internet). Flow logs capture rejected traffic only to keep log volume and cost low.
@@ -403,16 +401,19 @@ The database sits in the data zone with no route to or from the internet. Only
 the application and the password-rotation function are allowed to connect.
 
 Watched around the clock
-Alarms warn the team when the database is working too hard or running low on
-storage.
+Alarms warn the team (by email, once an address is set at deploy time) when
+the database is working too hard or running low on storage. Its logs live in a
+log group this stack owns, so they follow the same retention and clean-up
+settings as every other log.
 """
 
 from typing import TYPE_CHECKING, Any
 
-from aws_cdk import Duration, Stack
+from aws_cdk import Duration, Names, Stack
 from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_cloudwatch_actions as cloudwatch_actions
 from aws_cdk import aws_ec2 as ec2
+from aws_cdk import aws_logs as logs
 from aws_cdk import aws_rds as rds
 from aws_cdk import aws_secretsmanager as secretsmanager
 from aws_cdk import aws_sns as sns
@@ -454,9 +455,23 @@ class DatabaseStack(Stack):
             allow_all_outbound=False,
         )
 
+        # Database logs go to a log group this stack owns, so they follow the same
+        # retention and clean-up settings as every other log. A fixed database name
+        # lets the group exist before the database starts writing to it. (A change
+        # that would replace the database then needs a new name first.)
+        instance_id = f"{config.project}-{config.env_name}-postgres"
+        db_logs = logs.LogGroup(
+            self,
+            "PostgresLogs",
+            log_group_name=f"/aws/rds/instance/{instance_id}/postgresql",
+            retention=config.log_retention,
+            removal_policy=config.removal_policy,
+        )
+
         self.instance = rds.DatabaseInstance(
             self,
             "Postgres",
+            instance_identifier=instance_id,
             engine=rds.DatabaseInstanceEngine.postgres(
                 version=rds.PostgresEngineVersion.VER_16
             ),
@@ -484,9 +499,10 @@ class DatabaseStack(Stack):
             removal_policy=config.db_removal_policy,
             # Database logs go to CloudWatch for troubleshooting and audits.
             cloudwatch_logs_exports=["postgresql"],
-            cloudwatch_logs_retention=config.log_retention,
             enable_performance_insights=config.db_performance_insights,
         )
+
+        self.instance.node.add_dependency(db_logs)
 
         # Only the application may connect, on the database's own port.
         self.instance.connections.allow_default_port_from(
@@ -501,12 +517,23 @@ class DatabaseStack(Stack):
         # The password changes automatically on a schedule. The rotation function
         # runs in the application zone so it can reach Secrets Manager through the
         # NAT gateway.
-        self.instance.add_rotation_single_user(
+        rotation = self.instance.add_rotation_single_user(
             automatically_after=Duration.days(config.secret_rotation_days),
             vpc_subnets=ec2.SubnetSelection(
                 subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
             ),
         )
+
+        # The rotation function's logs also live in a group this stack owns. CDK names
+        # the function after the rotation's unique ID, so the group can exist first.
+        rotation_logs = logs.LogGroup(
+            self,
+            "RotationLogs",
+            log_group_name=f"/aws/lambda/{Names.unique_id(rotation)}",
+            retention=config.log_retention,
+            removal_policy=config.removal_policy,
+        )
+        rotation.node.add_dependency(rotation_logs)
 
         # Alarms send warnings to the shared alert channel.
         alarm_action = cloudwatch_actions.SnsAction(alarm_topic)
@@ -583,7 +610,8 @@ login at run time and caches it briefly; it is never stored in code.
 
 Full visibility
 Every API request is logged, requests are traced end to end, and alarms warn
-the team about errors, capped traffic and server failures.
+the team about errors, capped traffic and server failures (by email, once an
+address is set at deploy time).
 """
 
 from pathlib import Path
@@ -689,8 +717,11 @@ class ComputeStack(Stack):
             handler=self.handler,
             # Only the routes declared below exist; API Gateway rejects everything else.
             proxy=False,
-            # API Gateway needs an account-wide logging role to write its logs.
+            # API Gateway needs an account-wide logging role to write its logs. It is
+            # removed with the stack; every other API in this account and Region
+            # loses logging until the role is recreated.
             cloud_watch_role=True,
+            cloud_watch_role_removal_policy=config.removal_policy,
             default_method_options=apigw.MethodOptions(
                 authorization_type=authorization
             ),
@@ -725,6 +756,19 @@ class ComputeStack(Stack):
         self.health_method = self.api.root.add_resource("health").add_method(
             "GET", authorization_type=apigw.AuthorizationType.NONE
         )
+
+        # API Gateway's own error logs go to a group this stack owns, created before
+        # the stage starts writing, so they follow the same retention and clean-up.
+        execution_logs = logs.LogGroup(
+            self,
+            "ApiExecutionLogs",
+            log_group_name=(
+                f"API-Gateway-Execution-Logs_{self.api.rest_api_id}/{config.env_name}"
+            ),
+            retention=config.log_retention,
+            removal_policy=config.removal_policy,
+        )
+        self.api.deployment_stage.node.add_dependency(execution_logs)
 
         # Alarms send warnings to the shared alert channel.
         alarm_action = cloudwatch_actions.SnsAction(alarm_topic)
@@ -771,7 +815,7 @@ Notes:
 - `db_secret.grant_read()` produces a policy scoped to that one secret ARN.
 - `params_and_secrets` attaches the AWS Parameters and Secrets Lambda Extension, which is how the handler reads the secret without boto3.
 - `proxy=False` means only the declared routes exist: `GET /items`, which requires IAM authorization (`api_iam_auth`, on by default), and `GET /health`, open so uptime monitors can reach it. Routes added with `self.api.root.add_resource(...)` inherit IAM authorization.
-- `cloud_watch_role=True` creates the role API Gateway needs to write stage logs. It is an account-wide setting shared by every API in the account and Region.
+- `cloud_watch_role=True` creates the role API Gateway needs to write stage logs. It is an account-wide setting shared by every API in the account and Region, and it follows `removal_policy`: with the demo's `DESTROY` it is deleted with the stack, and other APIs in that account and Region lose logging until it is recreated.
 
 **Expansion hooks**
 
@@ -1025,8 +1069,8 @@ Result of `cdk synth -c nag=1`. Each is intentional for a demo; the right column
 | APIG3        | No WAF                                                       | Associate a WAFv2 web ACL                               |
 | APIG4        | `GET /health` is open by design for uptime monitors          | Suppressed on that route only; every other route uses IAM |
 | COG4         | Routes use IAM authorization, not Cognito                    | Cognito authorizer only if end customers sign in        |
-| IAM4         | AWS managed policies on the Lambda role (logging, VPC access), the API Gateway logging role, and CDK's log-retention helper | Generated by CDK; suppressed with justification |
-| IAM5         | `Resource: *` from X-Ray and CDK's log-retention helper      | Required by those services; suppressed with justification |
+| IAM4         | AWS managed policies on the Lambda role (logging, VPC access) and the API Gateway logging role | Generated by CDK; suppressed with justification |
+| IAM5         | `Resource: *` from X-Ray                                     | Required by X-Ray; suppressed with justification        |
 | RDS3         | Single-AZ                                                    | `db_multi_az=True`                                      |
 | RDS10        | Deletion protection off                                      | `db_deletion_protection=True`                           |
 | RDS11        | Default port 5432                                            | Optional; set `port=` (the DB security group rule follows the port automatically) |

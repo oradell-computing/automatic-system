@@ -12,16 +12,19 @@ The database sits in the data zone with no route to or from the internet. Only
 the application and the password-rotation function are allowed to connect.
 
 Watched around the clock
-Alarms warn the team when the database is working too hard or running low on
-storage.
+Alarms warn the team (by email, once an address is set at deploy time) when
+the database is working too hard or running low on storage. Its logs live in a
+log group this stack owns, so they follow the same retention and clean-up
+settings as every other log.
 """
 
 from typing import TYPE_CHECKING, Any
 
-from aws_cdk import Duration, Stack
+from aws_cdk import Duration, Names, Stack
 from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_cloudwatch_actions as cloudwatch_actions
 from aws_cdk import aws_ec2 as ec2
+from aws_cdk import aws_logs as logs
 from aws_cdk import aws_rds as rds
 from aws_cdk import aws_secretsmanager as secretsmanager
 from aws_cdk import aws_sns as sns
@@ -63,9 +66,23 @@ class DatabaseStack(Stack):
             allow_all_outbound=False,
         )
 
+        # Database logs go to a log group this stack owns, so they follow the same
+        # retention and clean-up settings as every other log. A fixed database name
+        # lets the group exist before the database starts writing to it. (A change
+        # that would replace the database then needs a new name first.)
+        instance_id = f"{config.project}-{config.env_name}-postgres"
+        db_logs = logs.LogGroup(
+            self,
+            "PostgresLogs",
+            log_group_name=f"/aws/rds/instance/{instance_id}/postgresql",
+            retention=config.log_retention,
+            removal_policy=config.removal_policy,
+        )
+
         self.instance = rds.DatabaseInstance(
             self,
             "Postgres",
+            instance_identifier=instance_id,
             engine=rds.DatabaseInstanceEngine.postgres(
                 version=rds.PostgresEngineVersion.VER_16
             ),
@@ -93,9 +110,10 @@ class DatabaseStack(Stack):
             removal_policy=config.db_removal_policy,
             # Database logs go to CloudWatch for troubleshooting and audits.
             cloudwatch_logs_exports=["postgresql"],
-            cloudwatch_logs_retention=config.log_retention,
             enable_performance_insights=config.db_performance_insights,
         )
+
+        self.instance.node.add_dependency(db_logs)
 
         # Only the application may connect, on the database's own port.
         self.instance.connections.allow_default_port_from(
@@ -110,12 +128,23 @@ class DatabaseStack(Stack):
         # The password changes automatically on a schedule. The rotation function
         # runs in the application zone so it can reach Secrets Manager through the
         # NAT gateway.
-        self.instance.add_rotation_single_user(
+        rotation = self.instance.add_rotation_single_user(
             automatically_after=Duration.days(config.secret_rotation_days),
             vpc_subnets=ec2.SubnetSelection(
                 subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
             ),
         )
+
+        # The rotation function's logs also live in a group this stack owns. CDK names
+        # the function after the rotation's unique ID, so the group can exist first.
+        rotation_logs = logs.LogGroup(
+            self,
+            "RotationLogs",
+            log_group_name=f"/aws/lambda/{Names.unique_id(rotation)}",
+            retention=config.log_retention,
+            removal_policy=config.removal_policy,
+        )
+        rotation.node.add_dependency(rotation_logs)
 
         # Alarms send warnings to the shared alert channel.
         alarm_action = cloudwatch_actions.SnsAction(alarm_topic)

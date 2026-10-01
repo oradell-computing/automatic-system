@@ -24,7 +24,8 @@ login at run time and caches it briefly; it is never stored in code.
 
 Full visibility
 Every API request is logged, requests are traced end to end, and alarms warn
-the team about errors, capped traffic and server failures.
+the team about errors, capped traffic and server failures (by email, once an
+address is set at deploy time).
 """
 
 from pathlib import Path
@@ -130,8 +131,11 @@ class ComputeStack(Stack):
             handler=self.handler,
             # Only the routes declared below exist; API Gateway rejects everything else.
             proxy=False,
-            # API Gateway needs an account-wide logging role to write its logs.
+            # API Gateway needs an account-wide logging role to write its logs. It is
+            # removed with the stack; every other API in this account and Region
+            # loses logging until the role is recreated.
             cloud_watch_role=True,
+            cloud_watch_role_removal_policy=config.removal_policy,
             default_method_options=apigw.MethodOptions(
                 authorization_type=authorization
             ),
@@ -166,6 +170,19 @@ class ComputeStack(Stack):
         self.health_method = self.api.root.add_resource("health").add_method(
             "GET", authorization_type=apigw.AuthorizationType.NONE
         )
+
+        # API Gateway's own error logs go to a group this stack owns, created before
+        # the stage starts writing, so they follow the same retention and clean-up.
+        execution_logs = logs.LogGroup(
+            self,
+            "ApiExecutionLogs",
+            log_group_name=(
+                f"API-Gateway-Execution-Logs_{self.api.rest_api_id}/{config.env_name}"
+            ),
+            retention=config.log_retention,
+            removal_policy=config.removal_policy,
+        )
+        self.api.deployment_stage.node.add_dependency(execution_logs)
 
         # Alarms send warnings to the shared alert channel.
         alarm_action = cloudwatch_actions.SnsAction(alarm_topic)

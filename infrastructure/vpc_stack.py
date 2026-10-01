@@ -15,12 +15,13 @@ data zone has no path to or from the internet at all.
 
 Security you can audit
 Blocked connection attempts are recorded for security reviews, and every stack
-sends its alerts to one shared channel.
+sends its alerts to one shared channel, which emails the team once you set an
+address at deploy time.
 """
 
 from typing import TYPE_CHECKING, Any
 
-from aws_cdk import Stack
+from aws_cdk import Annotations, Stack
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_sns as sns
@@ -105,4 +106,10 @@ class VpcStack(Stack):
         if config.alarm_email is not None:
             self.alarm_topic.add_subscription(
                 subscriptions.EmailSubscription(config.alarm_email)
+            )
+        else:
+            # Shown at synth and deploy time, so nobody ships silent alarms by accident.
+            Annotations.of(self).add_warning(
+                "No alarm_email set: alarms go to a topic nobody is subscribed to. "
+                "Deploy with -c alarm_email=you@example.com."
             )

@@ -40,12 +40,12 @@ flowchart LR
 - **API and compute:** API Gateway routes to a Python Lambda running on Graviton (ARM64). The stage is throttled and writes JSON access logs, and X-Ray tracing is on. Every route requires a request signed by an approved AWS identity (IAM), except an open `GET /health` for uptime monitors.
 - **Data:** RDS PostgreSQL with encrypted storage. Inbound access is limited to two security groups on port 5432: the API's Lambda and the secret-rotation Lambda.
 - **Credentials:** RDS generates the database password, stores it in Secrets Manager, and rotates it every 30 days. No credentials live in code or environment variables.
-- **Observability:** Each stack defines alarms for its own resources and sends them to one shared SNS topic. A separate stack builds a dashboard that combines RDS, Lambda, and API metrics.
+- **Observability:** Each stack defines alarms for its own resources and sends them to one shared SNS topic, which emails the address you give at deploy time. Every log group belongs to a stack, including the ones AWS services would otherwise create on their own (database, password rotation, API Gateway errors), so retention and clean-up follow `DemoConfig`. A separate stack builds a dashboard that combines RDS, Lambda, and API metrics.
 
 ## Engineering details worth a look
 
 - **No boto3.** The handler reads the database secret through the AWS Parameters and Secrets Lambda Extension, a local HTTP endpoint with built-in caching, using only the standard library.
-- **Least privilege through grants.** Lambda's access is `db_secret.grant_read()`, scoped to one secret ARN. The remaining wildcard permissions come from X-Ray, VPC networking and CDK's log-retention helper, which AWS requires, and are documented as accepted findings.
+- **Least privilege through grants.** Lambda's access is `db_secret.grant_read()`, scoped to one secret ARN. The remaining wildcard permissions come from X-Ray and VPC networking, which AWS requires, and are documented as accepted findings.
 - **The database is protected from Lambda bursts.** Reserved concurrency caps how many Lambdas can hold connections at once, and an alarm fires when that cap is hit.
 - **Cycle-free stacks.** Dependencies flow `vpc → database → compute → monitoring`. Turning on secret rotation would have created a circular dependency between the VPC and database stacks, so the DB security group lives with the database. The design doc explains why.
 - **One config object.** A frozen `@dataclass` in `app.py` holds every size, count, retention period, and removal policy, so moving to production means changing config rather than editing stacks.
@@ -102,7 +102,7 @@ The app deploys to the account and region of your current AWS CLI profile. Then:
 cdk bootstrap                # once per account/region
 cdk synth                    # build the CloudFormation templates
 cdk synth -c nag=1           # optional security scan
-cdk deploy --all
+cdk deploy --all -c alarm_email=you@example.com   # AWS emails you a link to confirm alerts
 ```
 
 The compute stack prints an `ApiEndpoint` output. Call the open health check to confirm the Lambda can reach its secret and the database (it answers `{"status": "ok"}`):
@@ -117,7 +117,7 @@ curl <ApiEndpoint>health
 awscurl --region <region> <ApiEndpoint>items
 ```
 
-Tear everything down:
+Tear everything down. With the demo settings this also deletes the log groups and API Gateway's logging role, which is shared by every API in the account and Region:
 
 ```bash
 cdk destroy --all

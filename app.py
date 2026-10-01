@@ -81,7 +81,8 @@ class DemoConfig:
 
 
 app = cdk.App()
-config = DemoConfig()
+# The alert email is set at deploy time: cdk deploy --all -c alarm_email=you@example.com
+config = DemoConfig(alarm_email=app.node.try_get_context("alarm_email"))
 
 # Deploys to the AWS account and region of your current AWS CLI profile.
 env = cdk.Environment(
@@ -148,16 +149,6 @@ if app.node.try_get_context("nag") is not None:
             ),
             NagPackSuppression(
                 id="AwsSolutions-RDS11", reason="Default port 5432; optional to change"
-            ),
-            NagPackSuppression(
-                id="AwsSolutions-IAM4",
-                reason="AWS managed logging policy on CDK's log-retention helper",
-                applies_to=[lambda_logging],
-            ),
-            NagPackSuppression(
-                id="AwsSolutions-IAM5",
-                reason="CDK's log-retention helper needs * to set RDS log retention",
-                applies_to=["Resource::*"],
             ),
         ],
     )
