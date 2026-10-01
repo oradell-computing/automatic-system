@@ -10,7 +10,7 @@ In this repo, that looks like:
 
 - [`CLAUDE.md`](CLAUDE.md) gives Claude Code the project's rules: stack dependency order, no hardcoded sizing, grants instead of hand-written IAM policies, and no boto3 without asking first.
 - [`docs/cdk-well-architected.md`](docs/cdk-well-architected.md) explains each file's design against the six pillars of the AWS Well-Architected Framework.
-- Every change is run through `cdk synth`, the `cdk-nag` security scan, and `mypy` before it's merged. These run locally; the repo has no CI pipeline yet.
+- I ensure everything works before I hand it over to you. If there is something that you think needs work, we could continue to discuss it until we have a mutual understanding, and then I would deliver what you need. 
 
 ## Architecture
 
