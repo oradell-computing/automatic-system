@@ -4,7 +4,7 @@ I build serverless architectures on AWS. This repo is a working demo of how I ap
 
 ## How I use AI
 
-I treat AI like flying an airplane. It gets a skilled pilot where they want to go very quickly, but it demands skill, constant attention to detail, and a deep understanding of safety and navigation rules.
+I think of AI like flying an airplane must be like for a pilot. AI gets a skilled operator where they want to go very quickly, but it demands knowledge, constant attention to detail, and a deep understanding of safety and navigation rules.
 
 In this repo, that looks like:
 
