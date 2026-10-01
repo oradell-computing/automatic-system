@@ -1,6 +1,6 @@
 # Secure Serverless API on AWS (CDK + Python)
 
-I build serverless architectures on AWS. This repo is a working demo of how I approach one: an API Gateway → Lambda → RDS PostgreSQL stack, defined entirely in AWS CDK (Python), where the database has no route to the internet and every permission is granted to a specific resource.
+I build serverless architectures on AWS. This repo is a working demo of how I approach one: an API Gateway → Lambda → RDS PostgreSQL stack, defined entirely in AWS CDK (Python), where the database has no route to the internet and every permission is scoped to a specific resource, apart from the few AWS requires to be broad (tracing and VPC networking).
 
 ## How I use AI
 
@@ -10,13 +10,13 @@ In this repo, that looks like:
 
 - [`CLAUDE.md`](CLAUDE.md) gives Claude Code the project's rules: stack dependency order, no hardcoded sizing, grants instead of hand-written IAM policies, and no boto3 without asking first.
 - [`docs/cdk-well-architected.md`](docs/cdk-well-architected.md) explains each file's design against the six pillars of the AWS Well-Architected Framework.
-- Every change has to pass `cdk synth`, the `cdk-nag` security scan, and `mypy` before it's accepted.
+- Every change is run through `cdk synth`, the `cdk-nag` security scan, and `mypy` before it's merged. These run locally; the repo has no CI pipeline yet.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    client([Client]) --> api[API Gateway<br/>throttled, access-logged]
+    client([Client]) --> api[API Gateway<br/>IAM-authorized, throttled, access-logged]
     subgraph vpc[VPC across 2 AZs]
         subgraph app[App subnets]
             fn[Lambda<br/>Python, ARM64]
@@ -37,10 +37,10 @@ flowchart LR
 ```
 
 - **Network:** A two-AZ VPC with three subnet tiers. Public subnets hold only the NAT gateway, app subnets hold Lambda, and data subnets hold RDS with no internet route in either direction.
-- **API and compute:** API Gateway routes to a Python Lambda running on Graviton (ARM64). The stage is throttled and writes JSON access logs, and X-Ray tracing is on.
-- **Data:** RDS PostgreSQL with encrypted storage. The only inbound rule allows the Lambda security group on port 5432.
+- **API and compute:** API Gateway routes to a Python Lambda running on Graviton (ARM64). The stage is throttled and writes JSON access logs, and X-Ray tracing is on. Every route requires a request signed by an approved AWS identity (IAM), except an open `GET /health` for uptime monitors.
+- **Data:** RDS PostgreSQL with encrypted storage. Inbound access is limited to two security groups on port 5432: the API's Lambda and the secret-rotation Lambda.
 - **Credentials:** RDS generates the database password, stores it in Secrets Manager, and rotates it every 30 days. No credentials live in code or environment variables.
-- **Observability:** Each stack defines alarms for its own resources and sends them to one shared SNS topic. A separate stack builds a dashboard that combines RDS, Lambda, and API metrics.
+- **Observability:** Each stack defines alarms for its own resources and sends them to one shared SNS topic, which emails the address you give at deploy time. Every log group belongs to a stack, including the ones AWS services would otherwise create on their own (database, password rotation, API Gateway errors), so retention and clean-up follow `DemoConfig`. A separate stack builds a dashboard that combines RDS, Lambda, and API metrics.
 
 ## Engineering details worth a look
 
@@ -49,7 +49,7 @@ flowchart LR
 - **The database is protected from Lambda bursts.** Reserved concurrency caps how many Lambdas can hold connections at once, and an alarm fires when that cap is hit.
 - **Cycle-free stacks.** Dependencies flow `vpc → database → compute → monitoring`. Turning on secret rotation would have created a circular dependency between the VPC and database stacks, so the DB security group lives with the database. The design doc explains why.
 - **One config object.** A frozen `@dataclass` in `app.py` holds every size, count, retention period, and removal policy, so moving to production means changing config rather than editing stacks.
-- **Verified.** `cdk synth` passes, `mypy` reports no issues, and every remaining `cdk-nag` finding is listed below with its reason.
+- **Verified.** `cdk synth` passes, `mypy` reports no issues, and the `cdk-nag` scan passes: every remaining finding is suppressed in `app.py` with its reason and listed in the design doc.
 
 ## Demo defaults vs. production
 
@@ -58,16 +58,20 @@ This is a demo, and some settings are deliberately cheap or disposable. Each one
 | Area | Demo setting | Production change |
 |---|---|---|
 | RDS availability | Single-AZ, 1-day backups | Multi-AZ, 7+ day backups, deletion protection |
-| Teardown | `RemovalPolicy.DESTROY` | `RETAIN` or `SNAPSHOT` |
+| Teardown | `RemovalPolicy.DESTROY` for everything | `removal_policy=RETAIN`; `db_removal_policy=SNAPSHOT` (final backup) or `RETAIN` |
 | NAT | One gateway | One per AZ |
 | Logs | 1-week retention | 30+ days |
-| API access | No authorizer or WAF | Cognito/IAM/Lambda authorizer, WAFv2 web ACL |
+| Database insight | Performance Insights off (not available on `db.t4g.micro`) | Larger instance, `db_performance_insights=True` |
+| API access | IAM on every route except an open `/health`; no WAF | WAFv2 web ACL; Cognito or Lambda authorizer if customers sign in |
 
 ## Project structure
 
 ```
 ├── CLAUDE.md                       # Rules for Claude Code
 ├── app.py                          # DemoConfig, tags, stack wiring
+├── cdk.json                        # Tells the CDK CLI how to run app.py
+├── requirements.txt                # Pinned CDK libraries
+├── requirements-dev.txt            # Adds cdk-nag and mypy
 ├── docs/
 │   └── cdk-well-architected.md     # Design rationale per file
 ├── infrastructure/
@@ -89,24 +93,31 @@ This is a demo, and some settings are deliberately cheap or disposable. Each one
 npm install -g aws-cdk
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+pip install -r requirements-dev.txt    # optional: security scan and type checks
 ```
 
-Replace the placeholder account ID in `app.py` with your own, then:
+The app deploys to the account and region of your current AWS CLI profile. Then:
 
 ```bash
 cdk bootstrap                # once per account/region
 cdk synth                    # build the CloudFormation templates
 cdk synth -c nag=1           # optional security scan
-cdk deploy --all
+cdk deploy --all -c alarm_email=you@example.com   # AWS emails you a link to confirm alerts
 ```
 
-The compute stack prints an `ApiEndpoint` output. Call it to confirm the Lambda can reach its secret:
+The compute stack prints an `ApiEndpoint` output. Call the open health check to confirm the Lambda can reach its secret and the database (it answers `{"status": "ok"}`):
 
 ```bash
-curl <ApiEndpoint>items
+curl <ApiEndpoint>health
 ```
 
-Tear everything down:
+`/items` requires a request signed by an AWS identity allowed to invoke the API, for example with [awscurl](https://github.com/okigan/awscurl):
+
+```bash
+awscurl --region <region> <ApiEndpoint>items
+```
+
+Tear everything down. With the demo settings this also deletes the log groups and API Gateway's logging role, which is shared by every API in the account and Region:
 
 ```bash
 cdk destroy --all

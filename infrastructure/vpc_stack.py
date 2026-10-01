@@ -1,102 +1,122 @@
 """
 Secure Network Foundation
 
-A ready-to-deploy network that keeps your sensitive systems off the public
-internet, without the ongoing cost of NAT gateways.
+A ready-to-deploy network that keeps your sensitive systems off the
+public internet.
 
 Built to stay online
-The network spans two independent AWS locations (Availability Zones), so
-applications deployed across both can keep serving customers if one location
-has an outage.
+The network spans two AWS locations (Availability Zones), so
+applications deployed across both can keep serving customers if one
+location has an outage.
 
-Sensitive data stays private
-A public-facing zone handles incoming customer traffic. A private data zone has
-no path to or from the internet, which greatly reduces exposure for databases
-and internal systems. When those systems need AWS services, private connections
-can be added so that traffic never touches the public internet.
+Three zones, each with one job
+A public zone holds only the NAT gateway, the application's way out to
+AWS services. The application zone can reach out, but nothing can reach
+in. The data zone has no path to or from the internet at all.
 
-Leaner running costs
-Without NAT gateways, the private zone avoids the recurring hourly and
-per-gigabyte charges they carry.
-
-Clear visibility into network activity
-Network traffic is logged and kept for 30 days, giving your security and
-compliance teams a record for investigations and audits.
-
-Secure by default for new services
-Teams building on this foundation get a ready-made security group that blocks
-all incoming connections, a safe starting point for every new service.
+Security you can audit
+Blocked connection attempts are recorded for security reviews, and every
+stack sends its alerts to one shared channel, which emails the team once
+you set an address at deploy time.
 """
 
-from aws_cdk import (
-    CfnOutput,
-    RemovalPolicy,
-    Stack,
-    aws_ec2 as ec2,
-    aws_logs as logs,
-)
+from typing import TYPE_CHECKING, Any
+
+from aws_cdk import Annotations, Stack
+from aws_cdk import aws_ec2 as ec2
+from aws_cdk import aws_logs as logs
+from aws_cdk import aws_sns as sns
+from aws_cdk import aws_sns_subscriptions as subscriptions
 from constructs import Construct
+
+if TYPE_CHECKING:
+    from app import DemoConfig
 
 
 class VpcStack(Stack):
+    """VPC across two locations with public, app and data subnets."""
 
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        *,
+        config: "DemoConfig",
+        **kwargs: Any,
+    ) -> None:
+        """Create the network; settings come from ``config``."""
         super().__init__(scope, construct_id, **kwargs)
 
-        # Spans two AWS locations for resilience, with a public zone for customers and a private zone for data.
         self.vpc = ec2.Vpc(
             self,
-            "CoreVpc",
-            max_azs=2,
-            ip_addresses=ec2.IpAddresses.cidr("10.100.0.0/16"),
+            "Vpc",
+            ip_addresses=ec2.IpAddresses.cidr(config.vpc_cidr),
+            max_azs=config.max_azs,
+            # One shared NAT gateway keeps demo costs down.
+            nat_gateways=config.nat_gateways,
             subnet_configuration=[
+                # Holds only the NAT gateway.
                 ec2.SubnetConfiguration(
-                    name="IngressPublic",
+                    name="Public",
                     subnet_type=ec2.SubnetType.PUBLIC,
-                    cidr_mask=24,
+                    cidr_mask=config.subnet_cidr_mask,
                 ),
-                # No route to the internet, and no NAT charges.
+                # Runs the application: it can reach AWS services, but
+                # nothing can reach in.
                 ec2.SubnetConfiguration(
-                    name="DataIsolated",
+                    name="App",
+                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
+                    cidr_mask=config.subnet_cidr_mask,
+                ),
+                # Holds the database, with no route to or from the
+                # internet.
+                ec2.SubnetConfiguration(
+                    name="Data",
                     subnet_type=ec2.SubnetType.PRIVATE_ISOLATED,
-                    cidr_mask=24,
+                    cidr_mask=config.subnet_cidr_mask,
                 ),
             ],
-            nat_gateways=0,
         )
 
-        # Network activity is logged and kept for 30 days for investigations and audits.
-        log_group = logs.LogGroup(
+        # Blocked connection attempts are recorded for security reviews.
+        # Logging only blocked traffic keeps log volume and cost low.
+        flow_log_group = logs.LogGroup(
             self,
-            "VpcFlowLogsGroup",
-            retention=logs.RetentionDays.ONE_MONTH,
-            # Demo setting: logs are removed with the stack. For production, use RemovalPolicy.RETAIN.
-            removal_policy=RemovalPolicy.DESTROY,
+            "FlowLogs",
+            retention=config.log_retention,
+            removal_policy=config.removal_policy,
         )
         self.vpc.add_flow_log(
             "FlowLog",
-            destination=ec2.FlowLogDestination.to_cloud_watch_logs(log_group),
+            destination=ec2.FlowLogDestination.to_cloud_watch_logs(
+                flow_log_group
+            ),
+            traffic_type=ec2.FlowLogTrafficType.REJECT,
         )
 
-        # A safe starting point for new services: no incoming connections until you allow them.
-        self.internal_sg = ec2.SecurityGroup(
+        # The application's security group. The database admits it by
+        # identity, not by address. It lives here because the database
+        # and application stacks both use it.
+        self.lambda_sg = ec2.SecurityGroup(
             self,
-            "BaseInternalSecurityGroup",
+            "LambdaSg",
             vpc=self.vpc,
-            description="Default locked security baseline: deny inbound, allow outbound",
+            description="Lambda functions; outbound only",
             allow_all_outbound=True,
         )
 
-        # Shared with other stacks so the data and compute layers can build on this network.
-        CfnOutput(
-            self,
-            "VpcIdExport",
-            value=self.vpc.vpc_id,
-            export_name="CoreVpcId",
-        )
-        CfnOutput(
-            self,
-            "BaseSgExport",
-            value=self.internal_sg.security_group_id,
-            export_name="CoreBaseSgId",
-        )
+        # One alert channel for every stack, so warnings reach the team
+        # in one place.
+        self.alarm_topic = sns.Topic(self, "AlarmTopic", enforce_ssl=True)
+        if config.alarm_email is not None:
+            self.alarm_topic.add_subscription(
+                subscriptions.EmailSubscription(config.alarm_email)
+            )
+        else:
+            # Shown at synth and deploy time, so nobody ships silent
+            # alarms by accident.
+            Annotations.of(self).add_warning(
+                "No alarm_email set: alarms go to a topic nobody is "
+                "subscribed to. "
+                "Deploy with -c alarm_email=you@example.com."
+            )
