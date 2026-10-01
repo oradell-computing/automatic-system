@@ -4,19 +4,21 @@ AWS CDK v2 demo infrastructure in Python. Build infrastructure only unless told 
 
 ## Layout
 - `app.py`: `DemoConfig` dataclass, tags, stack wiring
-- `infrastructure/vpc_stack.py`: VPC, subnets, flow logs, Lambda security group
-- `infrastructure/database_stack.py`: RDS, DB security group, secret rotation
-- `infrastructure/compute_stack.py`: API Gateway, Lambda, IAM grants
+- `infrastructure/vpc_stack.py`: VPC, subnets, flow logs, Lambda security group, shared alarm topic
+- `infrastructure/database_stack.py`: RDS, DB security group, secret rotation, DB alarms
+- `infrastructure/compute_stack.py`: API Gateway, Lambda, IAM grants, API/Lambda alarms
+- `infrastructure/monitoring_stack.py`: Cross-stack CloudWatch dashboard only
 - `runtime/handler.py`: Lambda handler
 
 ## Before editing
-Read `docs/cdk-well-architected.md` before changing any file in `infrastructure/` or `runtime/`. Keep that doc in sync with code changes.
+Before changing a file in `infrastructure/` or `runtime/`, read its section in `docs/cdk-well-architected.md`. Update that section when the file's design changes.
 
 ## Rules
-- Stack dependencies flow `vpc → database → compute`, never the reverse. CloudFormation rejects cycles whatever their purpose.
-- Shared logging/alerting targets (SNS topics, log buckets) go in the earliest stack that needs them. Cross-stack dashboards go in a `monitoring_stack.py` after `compute`.
+- Stack dependencies flow `vpc → database → compute → monitoring`, never the reverse. CloudFormation rejects cycles whatever their purpose.
+- Each stack owns its own log groups and per-resource alarms.
+- Shared alerting targets (SNS topics, log buckets) go in the earliest stack that needs them. Cross-stack dashboards go in `monitoring_stack.py`.
 - All sizing, retention, and removal policies come from `DemoConfig`. No hardcoded values in stacks.
-- Pass typed constructs between stacks (`IVpc`, `ISecret`), not ARN strings.
+- Pass typed constructs between stacks (`IVpc`, `ISecret`, `sns.Topic`), not ARN strings.
 - Use `grant_*()` methods over raw `PolicyStatement`. No `"*"` resources.
 - A security group lives in the same stack as the resource it protects.
 - No boto3. If it seems necessary, stop and tell me why.
