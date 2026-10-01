@@ -1,6 +1,6 @@
 # Secure Serverless API on AWS (CDK + Python)
 
-I build serverless architectures on AWS. This repo is a working demo of how I approach one: an API Gateway → Lambda → RDS PostgreSQL stack, defined entirely in AWS CDK (Python), where the database has no route to the internet and every permission is granted to a specific resource.
+I build serverless architectures on AWS. This repo is a working demo of how I approach one: an API Gateway → Lambda → RDS PostgreSQL stack, defined entirely in AWS CDK (Python), where the database has no route to the internet and every permission is scoped to a specific resource, apart from the few AWS requires to be broad (tracing and VPC networking).
 
 ## How I use AI
 
@@ -10,7 +10,7 @@ In this repo, that looks like:
 
 - [`CLAUDE.md`](CLAUDE.md) gives Claude Code the project's rules: stack dependency order, no hardcoded sizing, grants instead of hand-written IAM policies, and no boto3 without asking first.
 - [`docs/cdk-well-architected.md`](docs/cdk-well-architected.md) explains each file's design against the six pillars of the AWS Well-Architected Framework.
-- Every change has to pass `cdk synth`, the `cdk-nag` security scan, and `mypy` before it's accepted.
+- Every change is run through `cdk synth`, the `cdk-nag` security scan, and `mypy` before it's merged. These run locally; the repo has no CI pipeline yet.
 
 ## Architecture
 

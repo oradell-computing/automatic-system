@@ -1,11 +1,11 @@
 # CDK Well-Architected Guide
 
-- **All code herein in both an example of AWS Well-Architected AND a draft of the final codebase. The code is not error free or functional yet. 
-- **This is preliminary code and it may have errors, sometimes serious errors. Do not simply copy code without first evaluating it for errors or omissions. 
-- **Find and use documentation from aws.com, especially Well Architected documentation and CDK documentation. 
-- **Always notify the user of code errors or omissions that you find in this draft. Create new code if you find an error or an omission and justify your changes to the user. 
+- **The code here is both an example of AWS Well-Architected design and a copy of the project's files.** It passes `cdk synth`, the `cdk-nag` scan and `mypy`, but it has not been tested by a real deployment.
+- **Evaluate code before reusing it.** It may still contain errors, sometimes serious ones. Do not copy it without first checking for errors or omissions.
+- **Find and use AWS documentation** (aws.amazon.com and docs.aws.amazon.com), especially the Well-Architected and CDK documentation.
+- **Always notify the user of code errors or omissions you find.** Write new code when you find one, and justify the change to the user.
 
-This codebase applies the six pillars of the AWS Well-Architected Framework. Every snippet below is a draft version of the project file it names. Edit the real file, then ask the user to evaluate changes. If the user approves changes, keep this doc in sync with the changes.
+This codebase applies the six pillars of the AWS Well-Architected Framework. Every snippet below is a copy of the project file it names. Edit the real file, then ask the user to evaluate changes. If the user approves changes, keep this doc in sync with the changes.
 
 Verified with `aws-cdk-lib==2.272.0`, `constructs==10.8.1`, `cdk-nag==2.38.2` and `mypy==2.3.1`: `cdk synth` passes with no warnings, `cdk synth -c nag=1` passes with every remaining finding suppressed (see [Accepted demo findings](#accepted-demo-findings)), and `mypy` reports no issues. `mypy` needs `infrastructure/__init__.py`; without it, it finds each stack under two module names and stops.
 
@@ -32,11 +32,11 @@ Dependencies flow one way: `vpc → database → compute → monitoring`. A stac
 
 These apply to every file.
 
-- **This is a demonstration of AWS architecture. Each file needs to be understandable by both corporate decisionmakers as well as software engineers. Comment above and inline using non technical language, and code simply and with obvious intent.  
+- **Written for two audiences.** This is a demonstration of AWS architecture. Each file needs to be understandable by both corporate decision-makers and software engineers. Comment above and inline in non-technical language, and code simply and with obvious intent.
 - **Config lives in one place.** Sizes, counts, retention and removal policy come from the frozen `DemoConfig` dataclass in `app.py`. Stacks receive it as a keyword-only `config` argument. No hardcoded sizing inside stacks.
 - **Pass constructs, not strings.** Stacks exchange typed interfaces (`ec2.IVpc`, `ec2.ISecurityGroup`, `secretsmanager.ISecret`), never ARN or ID strings. CDK generates the exports and grants for you.
 - **Grants over policy statements.** Use `resource.grant_*()` and `connections`/security-group rules. Write a raw `iam.PolicyStatement` only when no grant method exists, and never with `"*"` resources you control.
-- **A security group lives in the stack of the resource it protects.** See the [database gotcha](#gotcha-why-the-db-security-group-is-not-in-vpc_stackpy).
+- **A security group lives in the stack of the resource it protects.** A group that only identifies callers and has no inbound rules, like the Lambda security group, lives in `vpc_stack.py` so the database and compute stacks can both use it. See the [database gotcha](#gotcha-why-the-db-security-group-is-not-in-vpc_stackpy).
 - **Demo defaults are deliberate and reversible.** `RemovalPolicy.DESTROY`, 1-week logs, one NAT gateway, single-AZ RDS, no deletion protection. Production flips these via `DemoConfig`, not by editing stacks.
 - **No boto3 in `infrastructure/`.** CDK resolves references at synth time; there is nothing to call. Use CDK context lookups (`ec2.Vpc.from_lookup`, `ssm.StringParameter.value_from_lookup`) for existing resources; the CDK CLI performs and caches them in `cdk.context.json`.
 - **No asyncio in stacks.** CDK synthesis is synchronous and deterministic. Async belongs in `runtime/` if anywhere.
@@ -51,9 +51,10 @@ These apply to every file.
 """
 Secure Serverless API
 
-Brings the network, database, application and monitoring tiers together in
-one deployment. Every size, limit and retention period lives in DemoConfig
-below, so moving to production means changing settings, not rewriting stacks.
+Brings the network, database, application and monitoring tiers together
+in one deployment. Every size, limit and retention period lives in
+DemoConfig below, so moving to production means changing settings, not
+rewriting stacks.
 """
 
 import os
@@ -71,19 +72,24 @@ from infrastructure.vpc_stack import VpcStack
 
 @dataclass(frozen=True)
 class DemoConfig:
-    """Every size, limit, retention period and removal policy for one environment."""
+    """Every size, limit, retention period and removal policy.
+
+    One instance describes one environment, such as the demo.
+    """
 
     # Naming
     env_name: str = "demo"
     project: str = "cdk-demo"
 
-    # Network: two AWS locations and a single shared NAT gateway to keep costs down
+    # Network: two AWS locations and a single shared NAT gateway to keep
+    # costs down
     vpc_cidr: str = "10.0.0.0/16"
     subnet_cidr_mask: int = 24
     max_azs: int = 2
     nat_gateways: int = 1
 
-    # Database: smallest Graviton size, one location, short backup history
+    # Database: smallest Graviton size, one location, short backup
+    # history
     db_instance_type: ec2.InstanceType = ec2.InstanceType.of(
         ec2.InstanceClass.T4G, ec2.InstanceSize.MICRO
     )
@@ -92,7 +98,8 @@ class DemoConfig:
     db_max_storage_gib: int = 50
     db_backup_days: int = 1
     db_deletion_protection: bool = False
-    # The database alone can keep a final backup (SNAPSHOT) when it is deleted.
+    # The database alone can keep a final backup (SNAPSHOT) when it is
+    # deleted.
     db_removal_policy: cdk.RemovalPolicy = cdk.RemovalPolicy.DESTROY
     db_performance_insights: bool = False  # not available on the micro size
     secret_rotation_days: int = 30
@@ -116,21 +123,24 @@ class DemoConfig:
     lambda_error_alarm_count: int = 5
     api_5xx_alarm_count: int = 5
 
-    # Housekeeping: what happens to logs and other resources when stacks are deleted
+    # Housekeeping: what happens to logs and other resources when stacks
+    # are deleted
     log_retention: logs.RetentionDays = logs.RetentionDays.ONE_WEEK
     removal_policy: cdk.RemovalPolicy = cdk.RemovalPolicy.DESTROY
 
     def __post_init__(self) -> None:
-        """Reject settings that CloudFormation would refuse at deploy time."""
+        """Reject settings that CloudFormation would refuse."""
         if self.removal_policy == cdk.RemovalPolicy.SNAPSHOT:
             raise ValueError(
-                "removal_policy cannot be SNAPSHOT: log groups only support DESTROY "
-                "or RETAIN. Use db_removal_policy for a final database snapshot."
+                "removal_policy cannot be SNAPSHOT: log groups only "
+                "support DESTROY or RETAIN. Use db_removal_policy for a "
+                "final database snapshot."
             )
 
 
 app = cdk.App()
-# The alert email is set at deploy time: cdk deploy --all -c alarm_email=you@example.com
+# The alert email is set at deploy time: cdk deploy --all -c
+# alarm_email=you@example.com
 config = DemoConfig(alarm_email=app.node.try_get_context("alarm_email"))
 
 # Deploys to the AWS account and region of your current AWS CLI profile.
@@ -182,22 +192,30 @@ if app.node.try_get_context("nag") is not None:
 
     cdk.Aspects.of(app).add(AwsSolutionsChecks(verbose=True))
 
-    # Findings accepted for the demo, each with its reason and production fix (see
-    # "Accepted demo findings" in docs/cdk-well-architected.md). New ones still fail.
-    managed_policy = "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/"
+    # Findings accepted for the demo, each with its reason and
+    # production fix (see "Accepted demo findings" in
+    # docs/cdk-well-architected.md). New ones still fail.
+    managed_policy = (
+        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/"
+    )
     lambda_logging = managed_policy + "AWSLambdaBasicExecutionRole"
     NagSuppressions.add_stack_suppressions(
         database,
         [
             NagPackSuppression(
-                id="AwsSolutions-RDS3", reason="Single-AZ demo; set db_multi_az=True"
+                id="AwsSolutions-RDS3",
+                reason="Single-AZ demo; set db_multi_az=True",
             ),
             NagPackSuppression(
                 id="AwsSolutions-RDS10",
-                reason="No deletion protection in the demo; set db_deletion_protection",
+                reason=(
+                    "No deletion protection in the demo; "
+                    "set db_deletion_protection"
+                ),
             ),
             NagPackSuppression(
-                id="AwsSolutions-RDS11", reason="Default port 5432; optional to change"
+                id="AwsSolutions-RDS11",
+                reason="Default port 5432; optional to change",
             ),
         ],
     )
@@ -205,7 +223,8 @@ if app.node.try_get_context("nag") is not None:
         compute,
         [
             NagPackSuppression(
-                id="AwsSolutions-APIG2", reason="No request validation; add per route"
+                id="AwsSolutions-APIG2",
+                reason="No request validation; add per route",
             ),
             NagPackSuppression(
                 id="AwsSolutions-APIG3",
@@ -217,7 +236,10 @@ if app.node.try_get_context("nag") is not None:
             ),
             NagPackSuppression(
                 id="AwsSolutions-IAM4",
-                reason="AWS managed policies for Lambda, VPC and API Gateway logging",
+                reason=(
+                    "AWS managed policies for Lambda, VPC and "
+                    "API Gateway logging"
+                ),
                 applies_to=[
                     lambda_logging,
                     managed_policy + "AWSLambdaVPCAccessExecutionRole",
@@ -231,13 +253,16 @@ if app.node.try_get_context("nag") is not None:
             ),
         ],
     )
-    # Only the health check is open; any other route without sign-in still fails.
+    # Only the health check is open; any other route without sign-in
+    # still fails.
     NagSuppressions.add_resource_suppressions(
         compute.health_method,
         [
             NagPackSuppression(
                 id="AwsSolutions-APIG4",
-                reason="Open for uptime monitors; returns only ok or unavailable",
+                reason=(
+                    "Open for uptime monitors; returns only ok or unavailable"
+                ),
             ),
         ],
     )
@@ -245,7 +270,7 @@ if app.node.try_get_context("nag") is not None:
 app.synth()
 ```
 
-Replace the placeholder `account` with your own, or use `os.environ["CDK_DEFAULT_ACCOUNT"]`.
+The app deploys to the account and Region of your current AWS CLI profile (`CDK_DEFAULT_ACCOUNT` and `CDK_DEFAULT_REGION`), so there is no account ID to edit. Pass the alert email at deploy time with `-c alarm_email=you@example.com`.
 
 **Expansion hooks**
 
@@ -260,22 +285,23 @@ Replace the placeholder `account` with your own, or use `os.environ["CDK_DEFAULT
 """
 Secure Network Foundation
 
-A ready-to-deploy network that keeps your sensitive systems off the public
-internet.
+A ready-to-deploy network that keeps your sensitive systems off the
+public internet.
 
 Built to stay online
-The network spans two AWS locations (Availability Zones), so applications
-deployed across both can keep serving customers if one location has an outage.
+The network spans two AWS locations (Availability Zones), so
+applications deployed across both can keep serving customers if one
+location has an outage.
 
 Three zones, each with one job
-A public zone holds only the NAT gateway, the application's way out to AWS
-services. The application zone can reach out, but nothing can reach in. The
-data zone has no path to or from the internet at all.
+A public zone holds only the NAT gateway, the application's way out to
+AWS services. The application zone can reach out, but nothing can reach
+in. The data zone has no path to or from the internet at all.
 
 Security you can audit
-Blocked connection attempts are recorded for security reviews, and every stack
-sends its alerts to one shared channel, which emails the team once you set an
-address at deploy time.
+Blocked connection attempts are recorded for security reviews, and every
+stack sends its alerts to one shared channel, which emails the team once
+you set an address at deploy time.
 """
 
 from typing import TYPE_CHECKING, Any
@@ -292,7 +318,7 @@ if TYPE_CHECKING:
 
 
 class VpcStack(Stack):
-    """Two-location VPC with public, application and isolated data subnets."""
+    """VPC across two locations with public, app and data subnets."""
 
     def __init__(
         self,
@@ -302,7 +328,7 @@ class VpcStack(Stack):
         config: "DemoConfig",
         **kwargs: Any,
     ) -> None:
-        """Create the network; sizes and retention come from ``config``."""
+        """Create the network; settings come from ``config``."""
         super().__init__(scope, construct_id, **kwargs)
 
         self.vpc = ec2.Vpc(
@@ -319,14 +345,15 @@ class VpcStack(Stack):
                     subnet_type=ec2.SubnetType.PUBLIC,
                     cidr_mask=config.subnet_cidr_mask,
                 ),
-                # Runs the application: it can reach AWS services, but nothing can
-                # reach in.
+                # Runs the application: it can reach AWS services, but
+                # nothing can reach in.
                 ec2.SubnetConfiguration(
                     name="App",
                     subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
                     cidr_mask=config.subnet_cidr_mask,
                 ),
-                # Holds the database, with no route to or from the internet.
+                # Holds the database, with no route to or from the
+                # internet.
                 ec2.SubnetConfiguration(
                     name="Data",
                     subnet_type=ec2.SubnetType.PRIVATE_ISOLATED,
@@ -335,8 +362,8 @@ class VpcStack(Stack):
             ],
         )
 
-        # Blocked connection attempts are recorded for security reviews. Logging only
-        # blocked traffic keeps log volume and cost low.
+        # Blocked connection attempts are recorded for security reviews.
+        # Logging only blocked traffic keeps log volume and cost low.
         flow_log_group = logs.LogGroup(
             self,
             "FlowLogs",
@@ -345,13 +372,15 @@ class VpcStack(Stack):
         )
         self.vpc.add_flow_log(
             "FlowLog",
-            destination=ec2.FlowLogDestination.to_cloud_watch_logs(flow_log_group),
+            destination=ec2.FlowLogDestination.to_cloud_watch_logs(
+                flow_log_group
+            ),
             traffic_type=ec2.FlowLogTrafficType.REJECT,
         )
 
-        # The application's security group. The database admits it by identity, not
-        # by address. It lives here because the database and application stacks both
-        # use it.
+        # The application's security group. The database admits it by
+        # identity, not by address. It lives here because the database
+        # and application stacks both use it.
         self.lambda_sg = ec2.SecurityGroup(
             self,
             "LambdaSg",
@@ -360,16 +389,19 @@ class VpcStack(Stack):
             allow_all_outbound=True,
         )
 
-        # One alert channel for every stack, so warnings reach the team in one place.
+        # One alert channel for every stack, so warnings reach the team
+        # in one place.
         self.alarm_topic = sns.Topic(self, "AlarmTopic", enforce_ssl=True)
         if config.alarm_email is not None:
             self.alarm_topic.add_subscription(
                 subscriptions.EmailSubscription(config.alarm_email)
             )
         else:
-            # Shown at synth and deploy time, so nobody ships silent alarms by accident.
+            # Shown at synth and deploy time, so nobody ships silent
+            # alarms by accident.
             Annotations.of(self).add_warning(
-                "No alarm_email set: alarms go to a topic nobody is subscribed to. "
+                "No alarm_email set: alarms go to a topic nobody is "
+                "subscribed to. "
                 "Deploy with -c alarm_email=you@example.com."
             )
 ```
@@ -378,33 +410,35 @@ Three subnet tiers: `Public` (NAT gateway only), `App` (Lambda; outbound via NAT
 
 **Expansion hooks**
 
-- Set `nat_gateways=config.max_azs` in production so losing one AZ doesn't cut outbound traffic for the others.
+- In production, set `nat_gateways` to the same value as `max_azs` in `DemoConfig`, so losing one AZ doesn't cut outbound traffic for the others.
 - Add a Secrets Manager interface endpoint (`self.vpc.add_interface_endpoint("SecretsEndpoint", service=ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER)`) so secret reads skip the NAT. Costs per AZ per hour; worth it once traffic is steady.
 - Switch flow logs to `FlowLogTrafficType.ALL` when debugging connectivity.
 
 ## infrastructure/database_stack.py
 
-**Pillars:** Security (encryption, generated + rotated credentials, isolated subnets), Reliability (backups, alarms, optional Multi-AZ), Performance (gp3, Performance Insights), Sustainability (Graviton `t4g`).
+**Pillars:** Security (encryption, generated + rotated credentials, isolated subnets), Reliability (backups, alarms, optional Multi-AZ), Performance (gp3, optional Performance Insights), Sustainability (Graviton `t4g`).
 
 ```python
 """
 Data Tier
 
-A private, encrypted PostgreSQL database that only your application can reach.
+A private, encrypted PostgreSQL database that only your application can
+reach.
 
 No passwords in code
-AWS generates the database login, stores it in Secrets Manager and changes it
-automatically on a schedule.
+AWS generates the database login, stores it in Secrets Manager and
+changes it automatically on a schedule.
 
 Private by design
-The database sits in the data zone with no route to or from the internet. Only
-the application and the password-rotation function are allowed to connect.
+The database sits in the data zone with no route to or from the
+internet. Only the application and the password-rotation function are
+allowed to connect.
 
 Watched around the clock
-Alarms warn the team (by email, once an address is set at deploy time) when
-the database is working too hard or running low on storage. Its logs live in a
-log group this stack owns, so they follow the same retention and clean-up
-settings as every other log.
+Alarms warn the team (by email, once an address is set at deploy time)
+when the database is working too hard or running low on storage. Its
+logs live in a log group this stack owns, so they follow the same
+retention and clean-up settings as every other log.
 """
 
 from typing import TYPE_CHECKING, Any
@@ -424,7 +458,7 @@ if TYPE_CHECKING:
 
 
 class DatabaseStack(Stack):
-    """RDS PostgreSQL with a generated, rotating password and baseline alarms."""
+    """RDS PostgreSQL with a rotating password and baseline alarms."""
 
     def __init__(
         self,
@@ -437,28 +471,30 @@ class DatabaseStack(Stack):
         alarm_topic: sns.ITopic,
         **kwargs: Any,
     ) -> None:
-        """Create the database in ``vpc``, reachable from ``lambda_security_group``.
+        """Create the database in ``vpc``.
 
-        Alarms go to ``alarm_topic``; every size and retention period comes from
+        ``lambda_security_group`` may connect and alarms go to
+        ``alarm_topic``; every size and retention period comes from
         ``config``.
         """
         super().__init__(scope, construct_id, **kwargs)
 
-        # The database's security group lives with the database. Password rotation
-        # opens access on the database's port, and keeping both here avoids a
-        # circular dependency between stacks.
+        # The database's security group lives with the database.
+        # Password rotation opens access on the database's port, and
+        # keeping both here avoids a circular dependency between stacks.
         self.db_sg = ec2.SecurityGroup(
             self,
             "DbSg",
             vpc=vpc,
-            description="RDS; inbound from the app and rotation functions only",
+            description="RDS; inbound from app and rotation functions only",
             allow_all_outbound=False,
         )
 
-        # Database logs go to a log group this stack owns, so they follow the same
-        # retention and clean-up settings as every other log. A fixed database name
-        # lets the group exist before the database starts writing to it. (A change
-        # that would replace the database then needs a new name first.)
+        # Database logs go to a log group this stack owns, so they
+        # follow the same retention and clean-up settings as every other
+        # log. A fixed database name lets the group exist before the
+        # database starts writing to it. (A change that would replace
+        # the database then needs a new name first.)
         instance_id = f"{config.project}-{config.env_name}-postgres"
         db_logs = logs.LogGroup(
             self,
@@ -478,16 +514,18 @@ class DatabaseStack(Stack):
             # Efficient AWS Graviton processors.
             instance_type=config.db_instance_type,
             vpc=vpc,
-            # Kept in the data zone, with no route to or from the internet.
+            # Kept in the data zone, with no route to or from the
+            # internet.
             vpc_subnets=ec2.SubnetSelection(
                 subnet_type=ec2.SubnetType.PRIVATE_ISOLATED
             ),
             security_groups=[self.db_sg],
-            # No passwords in code: AWS generates the login and stores it in
-            # Secrets Manager.
+            # No passwords in code: AWS generates the login and stores
+            # it in Secrets Manager.
             credentials=rds.Credentials.from_generated_secret("app_admin"),
             multi_az=config.db_multi_az,
-            # Storage starts small and grows automatically up to a set limit.
+            # Storage starts small and grows automatically up to a set
+            # limit.
             allocated_storage=config.db_storage_gib,
             max_allocated_storage=config.db_max_storage_gib,
             storage_type=rds.StorageType.GP3,
@@ -495,9 +533,11 @@ class DatabaseStack(Stack):
             storage_encrypted=True,
             backup_retention=Duration.days(config.db_backup_days),
             deletion_protection=config.db_deletion_protection,
-            # Demo: deleted with the stack. Production: SNAPSHOT keeps a final backup.
+            # Demo: deleted with the stack. Production: SNAPSHOT keeps a
+            # final backup.
             removal_policy=config.db_removal_policy,
-            # Database logs go to CloudWatch for troubleshooting and audits.
+            # Database logs go to CloudWatch for troubleshooting and
+            # audits.
             cloudwatch_logs_exports=["postgresql"],
             enable_performance_insights=config.db_performance_insights,
         )
@@ -514,9 +554,9 @@ class DatabaseStack(Stack):
             raise ValueError("Expected RDS to generate a credentials secret")
         self.secret: secretsmanager.ISecret = secret
 
-        # The password changes automatically on a schedule. The rotation function
-        # runs in the application zone so it can reach Secrets Manager through the
-        # NAT gateway.
+        # The password changes automatically on a schedule. The rotation
+        # function runs in the application zone so it can reach Secrets
+        # Manager through the NAT gateway.
         rotation = self.instance.add_rotation_single_user(
             automatically_after=Duration.days(config.secret_rotation_days),
             vpc_subnets=ec2.SubnetSelection(
@@ -524,8 +564,9 @@ class DatabaseStack(Stack):
             ),
         )
 
-        # The rotation function's logs also live in a group this stack owns. CDK names
-        # the function after the rotation's unique ID, so the group can exist first.
+        # The rotation function's logs also live in a group this stack
+        # owns. CDK names the function after the rotation's unique ID,
+        # so the group can exist first.
         rotation_logs = logs.LogGroup(
             self,
             "RotationLogs",
@@ -538,7 +579,9 @@ class DatabaseStack(Stack):
         # Alarms send warnings to the shared alert channel.
         alarm_action = cloudwatch_actions.SnsAction(alarm_topic)
         period = Duration.minutes(config.metric_period_minutes)
-        cpu_minutes = config.metric_period_minutes * config.db_cpu_alarm_periods
+        cpu_minutes = (
+            config.metric_period_minutes * config.db_cpu_alarm_periods
+        )
 
         cpu_alarm = cloudwatch.Alarm(
             self,
@@ -574,9 +617,8 @@ class DatabaseStack(Stack):
 
 **Expansion hooks**
 
-- Production: `db_multi_az=True`, `deletion_protection=True`, `backup_retention=Duration.days(7)` or more, `db_removal_policy=RemovalPolicy.SNAPSHOT`.
+- Production: `db_multi_az=True`, `db_deletion_protection=True`, `db_backup_days=7` or more, `db_removal_policy=RemovalPolicy.SNAPSHOT`.
 - Add an `rds.DatabaseProxy` between Lambda and RDS when concurrency grows; it pools connections so Lambda bursts don't exhaust `max_connections`.
-- Wire alarms to an SNS topic: `alarm.add_alarm_action(cloudwatch_actions.SnsAction(topic))` (import `aws_cloudwatch_actions`).
 - Swap `storage_encrypted=True` for `storage_encryption_key=kms.Key(...)` to use a customer-managed key.
 
 ## infrastructure/compute_stack.py
@@ -590,28 +632,30 @@ Application Tier
 A serverless API that answers requests, with no servers to manage.
 
 Pay only for what you use
-Your code runs only when a request arrives, so you pay for compute only while
-it is working. Traffic limits and a cap on simultaneous copies protect the
-application and database from sudden spikes.
+Your code runs only when a request arrives, so you pay for compute only
+while it is working. Traffic limits and a cap on simultaneous copies
+protect the application and database from sudden spikes.
 
 Private by design
-The application runs in the private application zone. It reaches the database
-directly and AWS services through the NAT gateway; nothing can reach in.
+The application runs in the private application zone. It reaches the
+database directly and AWS services through the NAT gateway; nothing can
+reach in.
 
 Approved callers only
-Requests must come from an AWS identity you have approved through IAM. The
-health check is the one open route, so uptime monitors can reach it, and it
-reveals nothing beyond "ok" or "unavailable".
+Requests must come from an AWS identity you have approved through IAM.
+The health check is the one open route, so uptime monitors can reach it,
+and it reveals nothing beyond "ok" or "unavailable".
 
 Least-privilege access
-Beyond tracing, logging and networking, the application can read exactly one
-thing: its database login. AWS's Parameters and Secrets extension fetches that
-login at run time and caches it briefly; it is never stored in code.
+Beyond tracing, logging and networking, the application can read exactly
+one thing: its database login. AWS's Parameters and Secrets extension
+fetches that login at run time and caches it briefly; it is never stored
+in code.
 
 Full visibility
-Every API request is logged, requests are traced end to end, and alarms warn
-the team about errors, capped traffic and server failures (by email, once an
-address is set at deploy time).
+Every API request is logged, requests are traced end to end, and alarms
+warn the team about errors, capped traffic and server failures (by
+email, once an address is set at deploy time).
 """
 
 from pathlib import Path
@@ -635,7 +679,7 @@ RUNTIME_DIR = Path(__file__).resolve().parent.parent / "runtime"
 
 
 class ComputeStack(Stack):
-    """Rate-limited REST API in front of a private Lambda function, with alarms."""
+    """Rate-limited REST API, private Lambda function and alarms."""
 
     def __init__(
         self,
@@ -649,10 +693,10 @@ class ComputeStack(Stack):
         alarm_topic: sns.ITopic,
         **kwargs: Any,
     ) -> None:
-        """Create the API and its function, which may read only ``db_secret``.
+        """Create the API and a function that reads only ``db_secret``.
 
-        Alarms go to ``alarm_topic``; every size, limit and retention period comes
-        from ``config``.
+        Alarms go to ``alarm_topic``; every size, limit and retention
+        period comes from ``config``.
         """
         super().__init__(scope, construct_id, **kwargs)
 
@@ -667,15 +711,18 @@ class ComputeStack(Stack):
             self,
             "Handler",
             runtime=lambda_.Runtime.PYTHON_3_14,
-            # Lower running costs with efficient AWS Graviton processors.
+            # Lower running costs with efficient AWS Graviton
+            # processors.
             architecture=lambda_.Architecture.ARM_64,
             handler="handler.handler",
             code=lambda_.Code.from_asset(str(RUNTIME_DIR)),
             memory_size=config.lambda_memory_mb,
             timeout=Duration.seconds(config.lambda_timeout_seconds),
-            # Caps how many copies run at once, so a burst can't overwhelm the database.
+            # Caps how many copies run at once, so a burst can't
+            # overwhelm the database.
             reserved_concurrent_executions=config.lambda_reserved_concurrency,
-            # Runs in the application zone: it can reach out, but nothing can reach in.
+            # Runs in the application zone: it can reach out, but
+            # nothing can reach in.
             vpc=vpc,
             vpc_subnets=ec2.SubnetSelection(
                 subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
@@ -684,20 +731,25 @@ class ComputeStack(Stack):
             log_group=handler_logs,
             # Traces show where time is spent on every request.
             tracing=lambda_.Tracing.ACTIVE,
-            # AWS's extension fetches the database login and caches it briefly.
+            # AWS's extension fetches the database login and caches it
+            # briefly.
             params_and_secrets=lambda_.ParamsAndSecretsLayerVersion.from_version(
                 lambda_.ParamsAndSecretsVersions.V1_0_103,
-                secrets_manager_ttl=Duration.minutes(config.secret_cache_minutes),
+                secrets_manager_ttl=Duration.minutes(
+                    config.secret_cache_minutes
+                ),
             ),
-            # Only the login's location is shared with the application, never the
-            # password itself.
+            # Only the login's location is shared with the application,
+            # never the password itself.
             environment={"DB_SECRET_ARN": db_secret.secret_arn},
         )
 
-        # The application may read its database login, and nothing else of yours.
+        # The application may read its database login, and nothing else
+        # of yours.
         db_secret.grant_read(self.handler)
 
-        # Every API request is logged with its time, address, route and result.
+        # Every API request is logged with its time, address, route and
+        # result.
         access_logs = logs.LogGroup(
             self,
             "ApiAccessLogs",
@@ -706,7 +758,8 @@ class ComputeStack(Stack):
         )
 
         if config.api_iam_auth:
-            # Only AWS identities you approve through IAM can call the API.
+            # Only AWS identities you approve through IAM can call the
+            # API.
             authorization = apigw.AuthorizationType.IAM
         else:
             authorization = apigw.AuthorizationType.NONE
@@ -715,11 +768,13 @@ class ComputeStack(Stack):
             self,
             "Api",
             handler=self.handler,
-            # Only the routes declared below exist; API Gateway rejects everything else.
+            # Only the routes declared below exist; API Gateway rejects
+            # everything else.
             proxy=False,
-            # API Gateway needs an account-wide logging role to write its logs. It is
-            # removed with the stack; every other API in this account and Region
-            # loses logging until the role is recreated.
+            # API Gateway needs an account-wide logging role to write
+            # its logs. It is removed with the stack; every other API in
+            # this account and Region loses logging until the role is
+            # recreated.
             cloud_watch_role=True,
             cloud_watch_role_removal_policy=config.removal_policy,
             default_method_options=apigw.MethodOptions(
@@ -727,12 +782,15 @@ class ComputeStack(Stack):
             ),
             deploy_options=apigw.StageOptions(
                 stage_name=config.env_name,
-                # Traffic limits keep the application and database steady during spikes.
+                # Traffic limits keep the application and database
+                # steady during spikes.
                 throttling_rate_limit=config.api_rate_limit,
                 throttling_burst_limit=config.api_burst_limit,
                 tracing_enabled=True,
                 logging_level=apigw.MethodLoggingLevel.ERROR,
-                access_log_destination=apigw.LogGroupLogDestination(access_logs),
+                access_log_destination=apigw.LogGroupLogDestination(
+                    access_logs
+                ),
                 access_log_format=apigw.AccessLogFormat.json_with_standard_fields(
                     caller=False,
                     http_method=True,
@@ -747,18 +805,20 @@ class ComputeStack(Stack):
             ),
         )
 
-        # GET /items confirms the app can fetch its login and reach the database.
-        # Like every route added later, it follows the sign-in rule above.
+        # GET /items confirms the app can fetch its login and reach the
+        # database. Like every route added later, it follows the sign-in
+        # rule above.
         self.api.root.add_resource("items").add_method("GET")
 
-        # GET /health runs the same check but stays open, so uptime monitors can
-        # reach it. It shows only "ok" or "unavailable".
+        # GET /health runs the same check but stays open, so uptime
+        # monitors can reach it. It shows only "ok" or "unavailable".
         self.health_method = self.api.root.add_resource("health").add_method(
             "GET", authorization_type=apigw.AuthorizationType.NONE
         )
 
-        # API Gateway's own error logs go to a group this stack owns, created before
-        # the stage starts writing, so they follow the same retention and clean-up.
+        # API Gateway's own error logs go to a group this stack owns,
+        # created before the stage starts writing, so they follow the
+        # same retention and clean-up.
         execution_logs = logs.LogGroup(
             self,
             "ApiExecutionLogs",
@@ -792,7 +852,9 @@ class ComputeStack(Stack):
             # Any turned-away request counts.
             threshold=1,
             evaluation_periods=config.alarm_evaluation_periods,
-            alarm_description="Lambda is turning requests away at its concurrency cap",
+            alarm_description=(
+                "Lambda is turning requests away at its concurrency cap"
+            ),
         )
         server_errors_alarm = cloudwatch.Alarm(
             self,
@@ -832,8 +894,9 @@ Notes:
 """
 Operations Dashboard
 
-One screen that shows the health of the API, the application and the database
-side by side, so anyone can see at a glance how the service is doing.
+One screen that shows the health of the API, the application and the
+database side by side, so anyone can see at a glance how the service is
+doing.
 """
 
 from typing import TYPE_CHECKING, Any
@@ -850,7 +913,10 @@ if TYPE_CHECKING:
 
 
 class MonitoringStack(Stack):
-    """Cross-stack CloudWatch dashboard. Alarms live with the resources they watch."""
+    """Cross-stack CloudWatch dashboard.
+
+    Alarms live with the resources they watch, in the other stacks.
+    """
 
     def __init__(
         self,
@@ -863,16 +929,19 @@ class MonitoringStack(Stack):
         api: apigw.RestApi,
         **kwargs: Any,
     ) -> None:
-        """Create one dashboard for ``api``, ``handler`` and ``database``."""
+        """Create a dashboard for ``api``, ``handler``, ``database``."""
         super().__init__(scope, construct_id, **kwargs)
 
         period = Duration.minutes(config.metric_period_minutes)
 
         dashboard = cloudwatch.Dashboard(
-            self, "Dashboard", dashboard_name=f"{config.project}-{config.env_name}"
+            self,
+            "Dashboard",
+            dashboard_name=f"{config.project}-{config.env_name}",
         )
 
-        # Front door: traffic arriving, how fast it is answered, and how much fails.
+        # Front door: traffic arriving, how fast it is answered, and how
+        # much fails.
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="API requests and errors",
@@ -888,7 +957,8 @@ class MonitoringStack(Stack):
             ),
         )
 
-        # Application: work done, failures, and how close it runs to its cap.
+        # Application: work done, failures, and how close it runs to its
+        # cap.
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="Lambda invocations, errors and throttles",
@@ -902,7 +972,9 @@ class MonitoringStack(Stack):
                 title="Lambda copies running at once",
                 left=[
                     handler.metric(
-                        "ConcurrentExecutions", period=period, statistic="Maximum"
+                        "ConcurrentExecutions",
+                        period=period,
+                        statistic="Maximum",
                     )
                 ],
                 left_annotations=[
@@ -913,7 +985,8 @@ class MonitoringStack(Stack):
             ),
         )
 
-        # Database: how hard it is working, connections held, and space left.
+        # Database: how hard it is working, connections held, and space
+        # left.
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="Database CPU (%)",
@@ -939,8 +1012,8 @@ class MonitoringStack(Stack):
 Application Health Check
 
 Confirms that the application can fetch its database login and reach the
-database, then reports only "ok" or "unavailable". Login details and error
-messages stay in your private logs.
+database, then reports only "ok" or "unavailable". Login details and
+error messages stay in your private logs.
 
 No extra code libraries
 AWS's Parameters and Secrets extension fetches the login and caches it
@@ -957,7 +1030,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# The extension answers on this local address and keeps a short-lived copy of the login.
+# The extension answers on this local address and keeps a short-lived
+# copy of the login.
 SECRETS_ENDPOINT = "http://localhost:2773/secretsmanager/get?secretId="
 
 # Short waits keep every answer well inside the function's time limit.
@@ -970,9 +1044,13 @@ def database_address() -> tuple[str, int]:
     secret_id = urllib.parse.quote(os.environ["DB_SECRET_ARN"], safe="")
     request = urllib.request.Request(
         SECRETS_ENDPOINT + secret_id,
-        headers={"X-Aws-Parameters-Secrets-Token": os.environ["AWS_SESSION_TOKEN"]},
+        headers={
+            "X-Aws-Parameters-Secrets-Token": os.environ["AWS_SESSION_TOKEN"]
+        },
     )
-    with urllib.request.urlopen(request, timeout=EXTENSION_TIMEOUT_SECONDS) as response:
+    with urllib.request.urlopen(
+        request, timeout=EXTENSION_TIMEOUT_SECONDS
+    ) as response:
         payload = json.loads(response.read())
     secret = json.loads(payload["SecretString"])
     return secret["host"], int(secret["port"])
@@ -988,9 +1066,10 @@ def respond(status_code: int, body: dict[str, str]) -> dict[str, Any]:
 
 
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
-    """Answer GET /health and GET /items with the login and database health."""
+    """Report login and database health for GET /health and /items."""
     try:
-        # Opening a connection proves the private network path to the database works.
+        # Opening a connection proves the private network path to the
+        # database works.
         with socket.create_connection(
             database_address(), timeout=DATABASE_TIMEOUT_SECONDS
         ):
@@ -1006,7 +1085,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
 
 **Rotation caveat.** After a rotation, the cached secret can be stale for up to the TTL. When you add a real DB connection, catch the authentication error, refetch once with `&versionStage=AWSCURRENT` appended to the URL, and retry.
 
-**DB driver packaging.** Lambda runtimes don't include a PostgreSQL driver. Use pure-Python `pg8000` (avoids compiled binaries on ARM64), listed in `runtime/requirements.txt`, and bundle it:
+**DB driver packaging.** Lambda runtimes don't include a PostgreSQL driver. Use pure-Python `pg8000` (avoids compiled binaries on ARM64), listed in a new `runtime/requirements.txt`, and bundle it:
 
 ```python
 from aws_cdk import BundlingOptions
@@ -1042,7 +1121,7 @@ mypy==2.3.1
 
 `cdk-nag` 3.0.2 failed at synth against `aws-cdk-lib` 2.272.0 (`aspect.visit is not a function`); stay on 2.x until that's resolved.
 
-`runtime/requirements.txt`:
+`runtime/requirements.txt` (only once you add a database driver; it doesn't exist yet):
 
 ```
 pg8000==1.31.5

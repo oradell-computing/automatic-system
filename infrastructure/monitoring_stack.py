@@ -1,8 +1,9 @@
 """
 Operations Dashboard
 
-One screen that shows the health of the API, the application and the database
-side by side, so anyone can see at a glance how the service is doing.
+One screen that shows the health of the API, the application and the
+database side by side, so anyone can see at a glance how the service is
+doing.
 """
 
 from typing import TYPE_CHECKING, Any
@@ -19,7 +20,10 @@ if TYPE_CHECKING:
 
 
 class MonitoringStack(Stack):
-    """Cross-stack CloudWatch dashboard. Alarms live with the resources they watch."""
+    """Cross-stack CloudWatch dashboard.
+
+    Alarms live with the resources they watch, in the other stacks.
+    """
 
     def __init__(
         self,
@@ -32,16 +36,19 @@ class MonitoringStack(Stack):
         api: apigw.RestApi,
         **kwargs: Any,
     ) -> None:
-        """Create one dashboard for ``api``, ``handler`` and ``database``."""
+        """Create a dashboard for ``api``, ``handler``, ``database``."""
         super().__init__(scope, construct_id, **kwargs)
 
         period = Duration.minutes(config.metric_period_minutes)
 
         dashboard = cloudwatch.Dashboard(
-            self, "Dashboard", dashboard_name=f"{config.project}-{config.env_name}"
+            self,
+            "Dashboard",
+            dashboard_name=f"{config.project}-{config.env_name}",
         )
 
-        # Front door: traffic arriving, how fast it is answered, and how much fails.
+        # Front door: traffic arriving, how fast it is answered, and how
+        # much fails.
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="API requests and errors",
@@ -57,7 +64,8 @@ class MonitoringStack(Stack):
             ),
         )
 
-        # Application: work done, failures, and how close it runs to its cap.
+        # Application: work done, failures, and how close it runs to its
+        # cap.
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="Lambda invocations, errors and throttles",
@@ -71,7 +79,9 @@ class MonitoringStack(Stack):
                 title="Lambda copies running at once",
                 left=[
                     handler.metric(
-                        "ConcurrentExecutions", period=period, statistic="Maximum"
+                        "ConcurrentExecutions",
+                        period=period,
+                        statistic="Maximum",
                     )
                 ],
                 left_annotations=[
@@ -82,7 +92,8 @@ class MonitoringStack(Stack):
             ),
         )
 
-        # Database: how hard it is working, connections held, and space left.
+        # Database: how hard it is working, connections held, and space
+        # left.
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="Database CPU (%)",

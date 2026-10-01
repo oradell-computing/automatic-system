@@ -2,9 +2,10 @@
 """
 Secure Serverless API
 
-Brings the network, database, application and monitoring tiers together in
-one deployment. Every size, limit and retention period lives in DemoConfig
-below, so moving to production means changing settings, not rewriting stacks.
+Brings the network, database, application and monitoring tiers together
+in one deployment. Every size, limit and retention period lives in
+DemoConfig below, so moving to production means changing settings, not
+rewriting stacks.
 """
 
 import os
@@ -22,19 +23,24 @@ from infrastructure.vpc_stack import VpcStack
 
 @dataclass(frozen=True)
 class DemoConfig:
-    """Every size, limit, retention period and removal policy for one environment."""
+    """Every size, limit, retention period and removal policy.
+
+    One instance describes one environment, such as the demo.
+    """
 
     # Naming
     env_name: str = "demo"
     project: str = "cdk-demo"
 
-    # Network: two AWS locations and a single shared NAT gateway to keep costs down
+    # Network: two AWS locations and a single shared NAT gateway to keep
+    # costs down
     vpc_cidr: str = "10.0.0.0/16"
     subnet_cidr_mask: int = 24
     max_azs: int = 2
     nat_gateways: int = 1
 
-    # Database: smallest Graviton size, one location, short backup history
+    # Database: smallest Graviton size, one location, short backup
+    # history
     db_instance_type: ec2.InstanceType = ec2.InstanceType.of(
         ec2.InstanceClass.T4G, ec2.InstanceSize.MICRO
     )
@@ -43,7 +49,8 @@ class DemoConfig:
     db_max_storage_gib: int = 50
     db_backup_days: int = 1
     db_deletion_protection: bool = False
-    # The database alone can keep a final backup (SNAPSHOT) when it is deleted.
+    # The database alone can keep a final backup (SNAPSHOT) when it is
+    # deleted.
     db_removal_policy: cdk.RemovalPolicy = cdk.RemovalPolicy.DESTROY
     db_performance_insights: bool = False  # not available on the micro size
     secret_rotation_days: int = 30
@@ -67,21 +74,24 @@ class DemoConfig:
     lambda_error_alarm_count: int = 5
     api_5xx_alarm_count: int = 5
 
-    # Housekeeping: what happens to logs and other resources when stacks are deleted
+    # Housekeeping: what happens to logs and other resources when stacks
+    # are deleted
     log_retention: logs.RetentionDays = logs.RetentionDays.ONE_WEEK
     removal_policy: cdk.RemovalPolicy = cdk.RemovalPolicy.DESTROY
 
     def __post_init__(self) -> None:
-        """Reject settings that CloudFormation would refuse at deploy time."""
+        """Reject settings that CloudFormation would refuse."""
         if self.removal_policy == cdk.RemovalPolicy.SNAPSHOT:
             raise ValueError(
-                "removal_policy cannot be SNAPSHOT: log groups only support DESTROY "
-                "or RETAIN. Use db_removal_policy for a final database snapshot."
+                "removal_policy cannot be SNAPSHOT: log groups only "
+                "support DESTROY or RETAIN. Use db_removal_policy for a "
+                "final database snapshot."
             )
 
 
 app = cdk.App()
-# The alert email is set at deploy time: cdk deploy --all -c alarm_email=you@example.com
+# The alert email is set at deploy time: cdk deploy --all -c
+# alarm_email=you@example.com
 config = DemoConfig(alarm_email=app.node.try_get_context("alarm_email"))
 
 # Deploys to the AWS account and region of your current AWS CLI profile.
@@ -133,22 +143,30 @@ if app.node.try_get_context("nag") is not None:
 
     cdk.Aspects.of(app).add(AwsSolutionsChecks(verbose=True))
 
-    # Findings accepted for the demo, each with its reason and production fix (see
-    # "Accepted demo findings" in docs/cdk-well-architected.md). New ones still fail.
-    managed_policy = "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/"
+    # Findings accepted for the demo, each with its reason and
+    # production fix (see "Accepted demo findings" in
+    # docs/cdk-well-architected.md). New ones still fail.
+    managed_policy = (
+        "Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/"
+    )
     lambda_logging = managed_policy + "AWSLambdaBasicExecutionRole"
     NagSuppressions.add_stack_suppressions(
         database,
         [
             NagPackSuppression(
-                id="AwsSolutions-RDS3", reason="Single-AZ demo; set db_multi_az=True"
+                id="AwsSolutions-RDS3",
+                reason="Single-AZ demo; set db_multi_az=True",
             ),
             NagPackSuppression(
                 id="AwsSolutions-RDS10",
-                reason="No deletion protection in the demo; set db_deletion_protection",
+                reason=(
+                    "No deletion protection in the demo; "
+                    "set db_deletion_protection"
+                ),
             ),
             NagPackSuppression(
-                id="AwsSolutions-RDS11", reason="Default port 5432; optional to change"
+                id="AwsSolutions-RDS11",
+                reason="Default port 5432; optional to change",
             ),
         ],
     )
@@ -156,7 +174,8 @@ if app.node.try_get_context("nag") is not None:
         compute,
         [
             NagPackSuppression(
-                id="AwsSolutions-APIG2", reason="No request validation; add per route"
+                id="AwsSolutions-APIG2",
+                reason="No request validation; add per route",
             ),
             NagPackSuppression(
                 id="AwsSolutions-APIG3",
@@ -168,7 +187,10 @@ if app.node.try_get_context("nag") is not None:
             ),
             NagPackSuppression(
                 id="AwsSolutions-IAM4",
-                reason="AWS managed policies for Lambda, VPC and API Gateway logging",
+                reason=(
+                    "AWS managed policies for Lambda, VPC and "
+                    "API Gateway logging"
+                ),
                 applies_to=[
                     lambda_logging,
                     managed_policy + "AWSLambdaVPCAccessExecutionRole",
@@ -182,13 +204,16 @@ if app.node.try_get_context("nag") is not None:
             ),
         ],
     )
-    # Only the health check is open; any other route without sign-in still fails.
+    # Only the health check is open; any other route without sign-in
+    # still fails.
     NagSuppressions.add_resource_suppressions(
         compute.health_method,
         [
             NagPackSuppression(
                 id="AwsSolutions-APIG4",
-                reason="Open for uptime monitors; returns only ok or unavailable",
+                reason=(
+                    "Open for uptime monitors; returns only ok or unavailable"
+                ),
             ),
         ],
     )

@@ -1,21 +1,23 @@
 """
 Data Tier
 
-A private, encrypted PostgreSQL database that only your application can reach.
+A private, encrypted PostgreSQL database that only your application can
+reach.
 
 No passwords in code
-AWS generates the database login, stores it in Secrets Manager and changes it
-automatically on a schedule.
+AWS generates the database login, stores it in Secrets Manager and
+changes it automatically on a schedule.
 
 Private by design
-The database sits in the data zone with no route to or from the internet. Only
-the application and the password-rotation function are allowed to connect.
+The database sits in the data zone with no route to or from the
+internet. Only the application and the password-rotation function are
+allowed to connect.
 
 Watched around the clock
-Alarms warn the team (by email, once an address is set at deploy time) when
-the database is working too hard or running low on storage. Its logs live in a
-log group this stack owns, so they follow the same retention and clean-up
-settings as every other log.
+Alarms warn the team (by email, once an address is set at deploy time)
+when the database is working too hard or running low on storage. Its
+logs live in a log group this stack owns, so they follow the same
+retention and clean-up settings as every other log.
 """
 
 from typing import TYPE_CHECKING, Any
@@ -35,7 +37,7 @@ if TYPE_CHECKING:
 
 
 class DatabaseStack(Stack):
-    """RDS PostgreSQL with a generated, rotating password and baseline alarms."""
+    """RDS PostgreSQL with a rotating password and baseline alarms."""
 
     def __init__(
         self,
@@ -48,28 +50,30 @@ class DatabaseStack(Stack):
         alarm_topic: sns.ITopic,
         **kwargs: Any,
     ) -> None:
-        """Create the database in ``vpc``, reachable from ``lambda_security_group``.
+        """Create the database in ``vpc``.
 
-        Alarms go to ``alarm_topic``; every size and retention period comes from
+        ``lambda_security_group`` may connect and alarms go to
+        ``alarm_topic``; every size and retention period comes from
         ``config``.
         """
         super().__init__(scope, construct_id, **kwargs)
 
-        # The database's security group lives with the database. Password rotation
-        # opens access on the database's port, and keeping both here avoids a
-        # circular dependency between stacks.
+        # The database's security group lives with the database.
+        # Password rotation opens access on the database's port, and
+        # keeping both here avoids a circular dependency between stacks.
         self.db_sg = ec2.SecurityGroup(
             self,
             "DbSg",
             vpc=vpc,
-            description="RDS; inbound from the app and rotation functions only",
+            description="RDS; inbound from app and rotation functions only",
             allow_all_outbound=False,
         )
 
-        # Database logs go to a log group this stack owns, so they follow the same
-        # retention and clean-up settings as every other log. A fixed database name
-        # lets the group exist before the database starts writing to it. (A change
-        # that would replace the database then needs a new name first.)
+        # Database logs go to a log group this stack owns, so they
+        # follow the same retention and clean-up settings as every other
+        # log. A fixed database name lets the group exist before the
+        # database starts writing to it. (A change that would replace
+        # the database then needs a new name first.)
         instance_id = f"{config.project}-{config.env_name}-postgres"
         db_logs = logs.LogGroup(
             self,
@@ -89,16 +93,18 @@ class DatabaseStack(Stack):
             # Efficient AWS Graviton processors.
             instance_type=config.db_instance_type,
             vpc=vpc,
-            # Kept in the data zone, with no route to or from the internet.
+            # Kept in the data zone, with no route to or from the
+            # internet.
             vpc_subnets=ec2.SubnetSelection(
                 subnet_type=ec2.SubnetType.PRIVATE_ISOLATED
             ),
             security_groups=[self.db_sg],
-            # No passwords in code: AWS generates the login and stores it in
-            # Secrets Manager.
+            # No passwords in code: AWS generates the login and stores
+            # it in Secrets Manager.
             credentials=rds.Credentials.from_generated_secret("app_admin"),
             multi_az=config.db_multi_az,
-            # Storage starts small and grows automatically up to a set limit.
+            # Storage starts small and grows automatically up to a set
+            # limit.
             allocated_storage=config.db_storage_gib,
             max_allocated_storage=config.db_max_storage_gib,
             storage_type=rds.StorageType.GP3,
@@ -106,9 +112,11 @@ class DatabaseStack(Stack):
             storage_encrypted=True,
             backup_retention=Duration.days(config.db_backup_days),
             deletion_protection=config.db_deletion_protection,
-            # Demo: deleted with the stack. Production: SNAPSHOT keeps a final backup.
+            # Demo: deleted with the stack. Production: SNAPSHOT keeps a
+            # final backup.
             removal_policy=config.db_removal_policy,
-            # Database logs go to CloudWatch for troubleshooting and audits.
+            # Database logs go to CloudWatch for troubleshooting and
+            # audits.
             cloudwatch_logs_exports=["postgresql"],
             enable_performance_insights=config.db_performance_insights,
         )
@@ -125,9 +133,9 @@ class DatabaseStack(Stack):
             raise ValueError("Expected RDS to generate a credentials secret")
         self.secret: secretsmanager.ISecret = secret
 
-        # The password changes automatically on a schedule. The rotation function
-        # runs in the application zone so it can reach Secrets Manager through the
-        # NAT gateway.
+        # The password changes automatically on a schedule. The rotation
+        # function runs in the application zone so it can reach Secrets
+        # Manager through the NAT gateway.
         rotation = self.instance.add_rotation_single_user(
             automatically_after=Duration.days(config.secret_rotation_days),
             vpc_subnets=ec2.SubnetSelection(
@@ -135,8 +143,9 @@ class DatabaseStack(Stack):
             ),
         )
 
-        # The rotation function's logs also live in a group this stack owns. CDK names
-        # the function after the rotation's unique ID, so the group can exist first.
+        # The rotation function's logs also live in a group this stack
+        # owns. CDK names the function after the rotation's unique ID,
+        # so the group can exist first.
         rotation_logs = logs.LogGroup(
             self,
             "RotationLogs",
@@ -149,7 +158,9 @@ class DatabaseStack(Stack):
         # Alarms send warnings to the shared alert channel.
         alarm_action = cloudwatch_actions.SnsAction(alarm_topic)
         period = Duration.minutes(config.metric_period_minutes)
-        cpu_minutes = config.metric_period_minutes * config.db_cpu_alarm_periods
+        cpu_minutes = (
+            config.metric_period_minutes * config.db_cpu_alarm_periods
+        )
 
         cpu_alarm = cloudwatch.Alarm(
             self,

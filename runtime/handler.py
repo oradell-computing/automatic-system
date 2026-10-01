@@ -2,8 +2,8 @@
 Application Health Check
 
 Confirms that the application can fetch its database login and reach the
-database, then reports only "ok" or "unavailable". Login details and error
-messages stay in your private logs.
+database, then reports only "ok" or "unavailable". Login details and
+error messages stay in your private logs.
 
 No extra code libraries
 AWS's Parameters and Secrets extension fetches the login and caches it
@@ -20,7 +20,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# The extension answers on this local address and keeps a short-lived copy of the login.
+# The extension answers on this local address and keeps a short-lived
+# copy of the login.
 SECRETS_ENDPOINT = "http://localhost:2773/secretsmanager/get?secretId="
 
 # Short waits keep every answer well inside the function's time limit.
@@ -33,9 +34,13 @@ def database_address() -> tuple[str, int]:
     secret_id = urllib.parse.quote(os.environ["DB_SECRET_ARN"], safe="")
     request = urllib.request.Request(
         SECRETS_ENDPOINT + secret_id,
-        headers={"X-Aws-Parameters-Secrets-Token": os.environ["AWS_SESSION_TOKEN"]},
+        headers={
+            "X-Aws-Parameters-Secrets-Token": os.environ["AWS_SESSION_TOKEN"]
+        },
     )
-    with urllib.request.urlopen(request, timeout=EXTENSION_TIMEOUT_SECONDS) as response:
+    with urllib.request.urlopen(
+        request, timeout=EXTENSION_TIMEOUT_SECONDS
+    ) as response:
         payload = json.loads(response.read())
     secret = json.loads(payload["SecretString"])
     return secret["host"], int(secret["port"])
@@ -51,9 +56,10 @@ def respond(status_code: int, body: dict[str, str]) -> dict[str, Any]:
 
 
 def handler(event: dict[str, Any], context: object) -> dict[str, Any]:
-    """Answer GET /health and GET /items with the login and database health."""
+    """Report login and database health for GET /health and /items."""
     try:
-        # Opening a connection proves the private network path to the database works.
+        # Opening a connection proves the private network path to the
+        # database works.
         with socket.create_connection(
             database_address(), timeout=DATABASE_TIMEOUT_SECONDS
         ):
