@@ -1,11 +1,11 @@
 # CDK Well-Architected Guide
 
--All code herein in both an example of well-architected code AND a draft of the final codebase. 
--This is a preliminary guide and it may have errors, sometimes serious errors. Do not simply copy code without evaluating it for errors or omissions first. 
--Use documentation from aws.com, especially well architected documentation and CDK documentation. 
--Always notify the user of errors or omissions that you find in this draft. Create new code if you find an error or an omission and justify your changes to the user. 
+- **All code herein in both an example of AWS Well-Architected AND a draft of the final codebase. The code is not error free or functional yet. 
+- **This is preliminary code and it may have errors, sometimes serious errors. Do not simply copy code without first evaluating it for errors or omissions. 
+- **Find and use documentation from aws.com, especially Well Architected documentation and CDK documentation. 
+- **Always notify the user of code errors or omissions that you find in this draft. Create new code if you find an error or an omission and justify your changes to the user. 
 
-This codebase applies the six pillars of the AWS Well-Architected Framework. Every snippet below is a draft version of the file it names. Edit the real file, then ask the user to evaluate changes. If the user approves changes, keep this doc in sync with the changes.
+This codebase applies the six pillars of the AWS Well-Architected Framework. Every snippet below is a draft version of the project file it names. Edit the real file, then ask the user to evaluate changes. If the user approves changes, keep this doc in sync with the changes.
 
 Verified with `aws-cdk-lib==2.272.0`, `constructs==10.8.1`: `cdk synth` passes, `mypy` reports no issues, and remaining `cdk-nag` findings are listed under [Accepted demo findings](#accepted-demo-findings).
 
@@ -27,6 +27,7 @@ Dependencies flow one way: `vpc → database → compute`. A stack may consume c
 
 These apply to every file.
 
+- **This is a demonstration of AWS architecture. Each file needs to be understandable by both corporate decisionmakers as well as software engineers. Comment above and inline using non technical language, and code simply and with obvious intent.  
 - **Config lives in one place.** Sizes, counts, retention and removal policy come from the frozen `DemoConfig` dataclass in `app.py`. Stacks receive it as a keyword-only `config` argument. No hardcoded sizing inside stacks.
 - **Pass constructs, not strings.** Stacks exchange typed interfaces (`ec2.IVpc`, `ec2.ISecurityGroup`, `secretsmanager.ISecret`), never ARN or ID strings. CDK generates the exports and grants for you.
 - **Grants over policy statements.** Use `resource.grant_*()` and `connections`/security-group rules. Write a raw `iam.PolicyStatement` only when no grant method exists, and never with `"*"` resources you control.
