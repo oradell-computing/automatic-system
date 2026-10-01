@@ -11,7 +11,7 @@ AWS CDK v2 demo infrastructure in Python. Build infrastructure only unless told 
 - `runtime/handler.py`: Lambda handler
 
 ## Before editing
-Before changing a file in `infrastructure/` or `runtime/`, read its section in `docs/cdk-well-architected.md`. Update that section when the file's design changes.
+Before changing a file in `infrastructure/` or `runtime/`, read its section in `docs/cdk-well-architected.md`. Update the equivalent code in that section (and only the code) when the file's design changes.
 
 ## Rules
 - Stack dependencies flow `vpc → database → compute → monitoring`, never the reverse. CloudFormation rejects cycles whatever their purpose.
