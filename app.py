@@ -63,6 +63,9 @@ class DemoConfig:
     api_rate_limit: int = 50
     api_burst_limit: int = 100
     api_iam_auth: bool = True  # every route except GET /health needs IAM
+    # API Gateway's own logs need an account-wide role shared by every
+    # API in the account and Region, so the demo leaves them off.
+    api_logging: bool = False
 
     # Alerts and dashboard
     alarm_email: str | None = None
@@ -90,9 +93,12 @@ class DemoConfig:
 
 
 app = cdk.App()
-# The alert email is set at deploy time: cdk deploy --all -c
-# alarm_email=you@example.com
-config = DemoConfig(alarm_email=app.node.try_get_context("alarm_email"))
+# Choices made at deploy time, for example:
+#   cdk deploy --all -c alarm_email=you@example.com -c api_logging=true
+config = DemoConfig(
+    alarm_email=app.node.try_get_context("alarm_email"),
+    api_logging=app.node.try_get_context("api_logging") in (True, "true"),
+)
 
 # Deploys to the AWS account and region of your current AWS CLI profile.
 env = cdk.Environment(
@@ -204,6 +210,22 @@ if app.node.try_get_context("nag") is not None:
             ),
         ],
     )
+    # API Gateway's own logs are off unless api_logging is on (they
+    # need an account-wide role), so accept those findings only then.
+    if not config.api_logging:
+        NagSuppressions.add_stack_suppressions(
+            compute,
+            [
+                NagPackSuppression(
+                    id="AwsSolutions-APIG1",
+                    reason="API access logs off in the demo; set api_logging",
+                ),
+                NagPackSuppression(
+                    id="AwsSolutions-APIG6",
+                    reason="API error logs off in the demo; set api_logging",
+                ),
+            ],
+        )
     # Only the health check is open; any other route without sign-in
     # still fails.
     NagSuppressions.add_resource_suppressions(

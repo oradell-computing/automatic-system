@@ -33,7 +33,7 @@ email, once an address is set at deploy time).
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from aws_cdk import Duration, Stack
+from aws_cdk import Annotations, Duration, Stack
 from aws_cdk import aws_apigateway as apigw
 from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_cloudwatch_actions as cloudwatch_actions
@@ -120,21 +120,50 @@ class ComputeStack(Stack):
         # of yours.
         db_secret.grant_read(self.handler)
 
-        # Every API request is logged with its time, address, route and
-        # result.
-        access_logs = logs.LogGroup(
-            self,
-            "ApiAccessLogs",
-            retention=config.log_retention,
-            removal_policy=config.removal_policy,
-        )
-
         if config.api_iam_auth:
             # Only AWS identities you approve through IAM can call the
             # API.
             authorization = apigw.AuthorizationType.IAM
         else:
             authorization = apigw.AuthorizationType.NONE
+
+        # API Gateway's own logs (access and error logs) need an
+        # account-wide logging role shared by every API in this account
+        # and Region. The demo leaves them off so it changes nothing
+        # outside itself; turn them on with -c api_logging=true.
+        logging_level = apigw.MethodLoggingLevel.OFF
+        access_log_destination: apigw.IAccessLogDestination | None = None
+        access_log_format: apigw.AccessLogFormat | None = None
+        if config.api_logging:
+            # Every API request is logged with its time, address, route
+            # and result.
+            access_logs = logs.LogGroup(
+                self,
+                "ApiAccessLogs",
+                retention=config.log_retention,
+                removal_policy=config.removal_policy,
+            )
+            logging_level = apigw.MethodLoggingLevel.ERROR
+            access_log_destination = apigw.LogGroupLogDestination(access_logs)
+            access_log_format = (
+                apigw.AccessLogFormat.json_with_standard_fields(
+                    caller=False,
+                    http_method=True,
+                    ip=True,
+                    protocol=True,
+                    request_time=True,
+                    resource_path=True,
+                    response_length=True,
+                    status=True,
+                    user=False,
+                )
+            )
+        else:
+            Annotations.of(self).add_info(
+                "API Gateway logging is off, so the demo changes no "
+                "account-wide settings. Turn it on with "
+                "-c api_logging=true."
+            )
 
         self.api = apigw.LambdaRestApi(
             self,
@@ -143,12 +172,10 @@ class ComputeStack(Stack):
             # Only the routes declared below exist; API Gateway rejects
             # everything else.
             proxy=False,
-            # API Gateway needs an account-wide logging role to write
-            # its logs. It is removed with the stack; every other API in
-            # this account and Region loses logging until the role is
-            # recreated.
-            cloud_watch_role=True,
-            cloud_watch_role_removal_policy=config.removal_policy,
+            # With API logging on, CDK creates the account-wide logging
+            # role. It is kept on teardown (CDK's default) because other
+            # APIs in the account and Region may rely on it.
+            cloud_watch_role=config.api_logging,
             default_method_options=apigw.MethodOptions(
                 authorization_type=authorization
             ),
@@ -159,21 +186,9 @@ class ComputeStack(Stack):
                 throttling_rate_limit=config.api_rate_limit,
                 throttling_burst_limit=config.api_burst_limit,
                 tracing_enabled=True,
-                logging_level=apigw.MethodLoggingLevel.ERROR,
-                access_log_destination=apigw.LogGroupLogDestination(
-                    access_logs
-                ),
-                access_log_format=apigw.AccessLogFormat.json_with_standard_fields(
-                    caller=False,
-                    http_method=True,
-                    ip=True,
-                    protocol=True,
-                    request_time=True,
-                    resource_path=True,
-                    response_length=True,
-                    status=True,
-                    user=False,
-                ),
+                logging_level=logging_level,
+                access_log_destination=access_log_destination,
+                access_log_format=access_log_format,
             ),
         )
 
@@ -188,19 +203,21 @@ class ComputeStack(Stack):
             "GET", authorization_type=apigw.AuthorizationType.NONE
         )
 
-        # API Gateway's own error logs go to a group this stack owns,
-        # created before the stage starts writing, so they follow the
-        # same retention and clean-up.
-        execution_logs = logs.LogGroup(
-            self,
-            "ApiExecutionLogs",
-            log_group_name=(
-                f"API-Gateway-Execution-Logs_{self.api.rest_api_id}/{config.env_name}"
-            ),
-            retention=config.log_retention,
-            removal_policy=config.removal_policy,
-        )
-        self.api.deployment_stage.node.add_dependency(execution_logs)
+        if config.api_logging:
+            # API Gateway's own error logs go to a group this stack
+            # owns, created before the stage starts writing, so they
+            # follow the same retention and clean-up.
+            execution_logs = logs.LogGroup(
+                self,
+                "ApiExecutionLogs",
+                log_group_name=(
+                    "API-Gateway-Execution-Logs_"
+                    f"{self.api.rest_api_id}/{config.env_name}"
+                ),
+                retention=config.log_retention,
+                removal_policy=config.removal_policy,
+            )
+            self.api.deployment_stage.node.add_dependency(execution_logs)
 
         # Alarms send warnings to the shared alert channel.
         alarm_action = cloudwatch_actions.SnsAction(alarm_topic)
