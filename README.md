@@ -1,6 +1,7 @@
 # Secure Serverless API on AWS (CDK + Python)
 
 I build serverless architectures on AWS. This repo is a working demo of how I approach one: an API Gateway → Lambda → RDS PostgreSQL stack, defined entirely in AWS CDK (Python), where the database has no route to the internet and every permission is scoped to a specific resource, apart from the few AWS requires to be broad (tracing and VPC networking).
+- I ensure everything works as promised before I hand it over to you. If there is something that you think needs additional work, we could discuss it until we have a mutual understanding, and then I would deliver what you need. 
 
 ## How I use AI
 
@@ -10,7 +11,7 @@ In this repo, that looks like:
 
 - [`CLAUDE.md`](CLAUDE.md) gives Claude Code the project's rules: stack dependency order, no hardcoded sizing, grants instead of hand-written IAM policies, and no boto3 without asking first.
 - [`docs/cdk-well-architected.md`](docs/cdk-well-architected.md) explains each file's design against the six pillars of the AWS Well-Architected Framework.
-- I ensure everything works as promised before I hand it over to you. If there is something that you think needs additional work, we could discuss it until we have a mutual understanding, and then I would deliver what you need. 
+
 
 ## Architecture
 
@@ -36,8 +37,8 @@ flowchart LR
     dash[CloudWatch dashboard]
 ```
 
-- **Network:** A two-AZ VPC with three subnet tiers. Public subnets hold only the NAT gateway, app subnets hold Lambda, and data subnets hold RDS with no internet route in either direction.
-- **API and compute:** API Gateway routes to a Python Lambda running on Graviton (ARM64). The stage is throttled and X-Ray tracing is on. API Gateway's own logs (JSON access logs and error logs) are available but off by default, because they need an account-wide role shared by every API in the account and Region; turn them on with `-c api_logging=true`. Every route requires a request signed by an approved AWS identity (IAM), except an open `GET /health` for uptime monitors.
+- **Network:** A two Availability Zone VPC with three subnet tiers. Public subnets hold only the NAT gateway, app subnets hold Lambda, and data subnets hold RDS (with no internet route in either direction).
+- **API and compute:** The API Gateway routes to a Python Lambda running on Graviton (ARM64). The stage is throttled and X-Ray tracing is on. API Gateway's own logs (JSON access logs and error logs) are available but off by default, because they need an account-wide role shared by every API in the account and Region; turn them on with `-c api_logging=true`. **WARNING** - since this is a demo, do not enable API Gateway logging in a region with active API logging. Finally, every route requires a request signed by an approved AWS identity (IAM), except an open `GET /health` for uptime monitors.
 - **Data:** RDS PostgreSQL with encrypted storage. Inbound access is limited to two security groups on port 5432: the API's Lambda and the secret-rotation Lambda.
 - **Credentials:** RDS generates the database password, stores it in Secrets Manager, and rotates it every 30 days. No credentials live in code or environment variables.
 - **Observability:** Each stack defines alarms for its own resources and sends them to one shared SNS topic, which emails the address you give at deploy time. Every log group belongs to a stack, including the ones AWS services would otherwise create on their own (database, password rotation, and API Gateway errors when API logging is on), so retention and clean-up follow `DemoConfig`. A separate stack builds a dashboard that combines RDS, Lambda, and API metrics.
