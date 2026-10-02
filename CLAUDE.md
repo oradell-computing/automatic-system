@@ -13,6 +13,11 @@ AWS CDK v2 demo infrastructure in Python. Build infrastructure only unless told 
 ## Before editing
 Before changing a file in `infrastructure/` or `runtime/`, read its section in `docs/cdk-well-architected.md`. Update the equivalent code in that section (and only the code) when the file's design changes.
 
+## Environment
+- Activate `.venv` before running `pip`, `cdk`, or `mypy`.
+- When installing a package, add it to `requirements.txt` with an exact `==` version. List direct dependencies only; never use `pip freeze`.
+- Use stable `aws-cdk-lib` modules only. No `*-alpha` packages unless I ask.
+
 ## Rules
 - Stack dependencies flow `vpc → database → compute → monitoring`, never the reverse. CloudFormation rejects cycles whatever their purpose.
 - Each stack owns its own log groups and per-resource alarms.
